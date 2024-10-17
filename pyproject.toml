@@ -1,0 +1,16 @@
+[build-system]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"
+
+[tool.poetry]
+name = "nubison-model"
+version = "0.0.0"
+description = ""
+authors = ["KyuWoo Choi <kyuwoo.choi@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry-dynamic-versioning]
+enable = true
