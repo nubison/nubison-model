@@ -10,7 +10,11 @@ authors = ["KyuWoo Choi <kyuwoo.choi@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.8 || ^3.9 || ^3.10 || ^3.11 || ^3.12 || ^3.13"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+tox = "^4.0"
 
 [tool.poetry-dynamic-versioning]
 enable = true
