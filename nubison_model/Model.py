@@ -50,9 +50,10 @@ def register(
     )
 
     mlflow.set_tracking_uri(mlflow_uri)
+    mlflow.set_experiment(model_name)
 
     # Start a new MLflow run
-    with mlflow.start_run(run_name=model_name) as run:
+    with mlflow.start_run() as run:
         # Log the model to MLflow
         mlflow.pyfunc.log_model(
             artifact_path="",
