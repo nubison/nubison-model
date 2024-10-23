@@ -1,11 +1,14 @@
 import mlflow
 
 from os import getenv
-from mlflow.pyfunc import PythonModel
+from sys import version_info as py_version_info
 from typing import Optional
+from importlib.metadata import distributions
+from mlflow.pyfunc import PythonModel
 
 DEFAULT_MODEL_NAME = "nubison_model"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
+DEFAULT_CONDA_CHANNELS = "default"  # Default Conda channels comma-separated
 
 
 class Model(PythonModel):
@@ -27,6 +30,25 @@ def register(
     if mlflow_uri is None:
         mlflow_uri = getenv("MLFLOW_TRACKING_URI", DEAFULT_MLFLOW_URI)
 
+    # Get the list of Conda channels
+    conda_channels = [
+        channel.strip()
+        for channel in getenv("CONDA_CHANNELS", DEFAULT_CONDA_CHANNELS).split(",")
+    ]
+    # Get the Python version
+    python_version = (
+        f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
+    )
+    # Get the list of installed packages
+    packages_list = sorted(
+        [
+            f"{dist.metadata['Name']}=={dist.version}"
+            for dist in distributions()
+            if dist.metadata["Name"]
+            is not None  # editable installs have a None metadata name
+        ]
+    )
+
     mlflow.set_tracking_uri(mlflow_uri)
 
     # Start a new MLflow run
@@ -36,9 +58,13 @@ def register(
             artifact_path="",
             python_model=model,
             conda_env={
-                "channels": ["defaults"],
-                "dependencies": ["python=3.8.5", "pip", {"pip": ["mlflow"]}],
-                "name": "mlflow-env",
+                "channels": conda_channels,
+                "dependencies": [
+                    f"python={python_version}",
+                    "pip",
+                    {"pip": packages_list},
+                ],
+                "name": model_name,
             },
             registered_model_name=model_name,
         )
