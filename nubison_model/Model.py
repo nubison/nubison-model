@@ -2,13 +2,14 @@ import mlflow
 
 from os import getenv
 from sys import version_info as py_version_info
-from typing import Optional
+from typing import Optional, List
 from importlib.metadata import distributions
 from mlflow.pyfunc import PythonModel
 
 DEFAULT_MODEL_NAME = "nubison_model"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_CONDA_CHANNELS = "default"  # Default Conda channels comma-separated
+DEFAULT_CODE_PATHS = "src"  # Default code paths comma-separated
 
 
 class Model(PythonModel):
@@ -23,12 +24,18 @@ def register(
     model: Model,
     model_name: Optional[str] = None,
     mlflow_uri: Optional[str] = None,
+    code_paths: Optional[List[str]] = None,
 ):
     # Get the model name and MLflow URI from environment variables if not provided
     if model_name is None:
         model_name = getenv("MODEL_NAME", DEFAULT_MODEL_NAME)
     if mlflow_uri is None:
         mlflow_uri = getenv("MLFLOW_TRACKING_URI", DEAFULT_MLFLOW_URI)
+    if code_paths is None:
+        code_paths = [
+            channel.strip()
+            for channel in getenv("CODE_PATHS", DEFAULT_CODE_PATHS).split(",")
+        ]
 
     # Get the list of Conda channels
     conda_channels = [
@@ -68,4 +75,5 @@ def register(
                 "name": model_name,
             },
             registered_model_name=model_name,
+            code_paths=code_paths,
         )
