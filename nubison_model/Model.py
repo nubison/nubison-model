@@ -2,13 +2,12 @@ import mlflow
 
 from os import getenv
 from sys import version_info as py_version_info
-from typing import Optional, List, Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 from importlib.metadata import distributions
 from mlflow.pyfunc import PythonModel
 
 DEFAULT_MODEL_NAME = "nubison_model"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
-DEFAULT_CONDA_CHANNELS = "default"  # Default Conda channels comma-separated
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
 
 
@@ -65,11 +64,6 @@ def register(
         dir.strip(): dir.strip() for dir in artifact_dirs.split(",") if dir != ""
     }
 
-    # Get the list of Conda channels
-    conda_channels = [
-        channel.strip()
-        for channel in getenv("CONDA_CHANNELS", DEFAULT_CONDA_CHANNELS).split(",")
-    ]
     # Get the Python version
     python_version = (
         f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
@@ -94,7 +88,6 @@ def register(
             artifact_path="",
             python_model=_make_mlflow_model(model),
             conda_env={
-                "channels": conda_channels,
                 "dependencies": [
                     f"python={python_version}",
                     "pip",
