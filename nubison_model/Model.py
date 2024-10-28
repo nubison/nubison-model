@@ -18,6 +18,30 @@ class Model(Protocol):
     def infer(self, input: any) -> any: ...
 
 
+def _make_conda_env() -> dict:
+    # Get the Python version
+    python_version = (
+        f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
+    )
+    # Get the list of installed packages
+    packages_list = sorted(
+        [
+            f"{dist.metadata['Name']}=={dist.version}"
+            for dist in distributions()
+            if dist.metadata["Name"]
+            is not None  # editable installs have a None metadata name
+        ]
+    )
+
+    return {
+        "dependencies": [
+            f"python={python_version}",
+            "pip",
+            {"pip": packages_list},
+        ],
+    }
+
+
 def _make_mlflow_model(nubison_model: Model) -> PythonModel:
 
     class MLflowModel(PythonModel):
@@ -64,20 +88,6 @@ def register(
         dir.strip(): dir.strip() for dir in artifact_dirs.split(",") if dir != ""
     }
 
-    # Get the Python version
-    python_version = (
-        f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
-    )
-    # Get the list of installed packages
-    packages_list = sorted(
-        [
-            f"{dist.metadata['Name']}=={dist.version}"
-            for dist in distributions()
-            if dist.metadata["Name"]
-            is not None  # editable installs have a None metadata name
-        ]
-    )
-
     mlflow.set_tracking_uri(mlflow_uri)
     mlflow.set_experiment(model_name)
 
@@ -87,14 +97,7 @@ def register(
         mlflow.pyfunc.log_model(
             artifact_path="",
             python_model=_make_mlflow_model(model),
-            conda_env={
-                "dependencies": [
-                    f"python={python_version}",
-                    "pip",
-                    {"pip": packages_list},
-                ],
-                "name": model_name,
-            },
+            conda_env=_make_conda_env(),
             registered_model_name=model_name,
             artifacts=artifact_dirs,
         )
