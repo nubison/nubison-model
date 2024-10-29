@@ -61,7 +61,7 @@ def _make_mlflow_model(nubison_model: Model) -> PythonModel:
             nubison_model.load_model()
 
         def predict(self, context, model_input):
-            return nubison_model.infer(model_input)
+            return nubison_model.infer(model_input["input"])
 
     return MLflowModel()
 
