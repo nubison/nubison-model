@@ -1,0 +1,6 @@
+pandas==2.0.3
+scikit-learn==1.3.2
+./path/local_package_1
+../path/local_package_2
+/path/local_package_3
+file://path/local_package_4

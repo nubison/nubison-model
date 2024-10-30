@@ -7,7 +7,7 @@ from shutil import rmtree
 
 from mlflow.tracking import MlflowClient
 from mlflow.pyfunc import load_model
-from nubison_model.Model import Model, register
+from nubison_model.Model import Model, register, _package_list_from_file
 
 
 @contextmanager
@@ -123,3 +123,12 @@ def test_model_load_artifact_code(mlflow_server):
     with temporary_dirs(["infer"]), temporary_cwd("infer"):
         model = load_model(f"models:/{model_name}/latest")
         assert model.predict("test") == "bartest"
+
+
+def test_package_list_from_file():
+    """
+    Test reading the package list from a requirements.txt file.
+    """
+    with temporary_cwd("test/fixtures"):
+        packages = _package_list_from_file()
+        assert packages == ["pandas==2.0.3", "scikit-learn==1.3.2"]
