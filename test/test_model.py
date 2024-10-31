@@ -131,4 +131,9 @@ def test_package_list_from_file():
     """
     with temporary_cwd("test/fixtures"):
         packages = _package_list_from_file()
-        assert packages == ["pandas==2.0.3", "scikit-learn==1.3.2"]
+        assert packages == [
+            "pandas==2.0.3",
+            "scikit-learn>=1.3.2",
+            "-e git+ssh://git@github.com/nubison/nubison-model.git",
+            "package_name @ git+https://git.example.com/MyProject",
+        ]

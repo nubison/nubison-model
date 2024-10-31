@@ -18,6 +18,18 @@ class Model(Protocol):
     def infer(self, input: any) -> any: ...
 
 
+def _is_shareable(package: str) -> bool:
+    # Nested requirements, constraints files, local packages, and comments are not supported
+    if package.startswith(("-r", "-c", "-e .", "-e /", "/", ".", "#")):
+        return False
+    # Check if the package is a local package
+    # eg. git+file:///path/to/repo.git, file:///path/to/repo, -e file:///
+    if "file:" in package:
+        return False
+
+    return True
+
+
 def _package_list_from_file() -> Optional[List]:
     # Check if the requirements file exists in order of priority
     candidates = ["requirements-prod.txt", "requirements.txt"]
@@ -30,11 +42,7 @@ def _package_list_from_file() -> Optional[List]:
         packages = file.readlines()
     packages = [package.strip() for package in packages if package.strip()]
     # Remove not sharable dependencies
-    packages = [
-        package
-        for package in packages
-        if not package.startswith(("file:", "./", "../", "/"))
-    ]
+    packages = [package for package in packages if _is_shareable(package)]
 
     return packages
 
@@ -54,7 +62,7 @@ def _make_conda_env() -> dict:
     python_version = (
         f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
     )
-    # Get the list of installed packages
+    # Get the list of installed packages from the requirements file or environment
     packages_list = _package_list_from_file() or _package_list_from_env()
 
     return {
