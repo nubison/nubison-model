@@ -1,9 +1,9 @@
-import mlflow
-
+from importlib.metadata import distributions
 from os import getenv, path
 from sys import version_info as py_version_info
-from typing import Optional, Protocol, runtime_checkable, List
-from importlib.metadata import distributions
+from typing import List, Optional, Protocol, runtime_checkable
+
+import mlflow
 from mlflow.pyfunc import PythonModel
 
 DEFAULT_MODEL_NAME = "nubison_model"

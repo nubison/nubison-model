@@ -1,13 +1,13 @@
-import pytest
-
-from os import environ, path, getcwd, makedirs, chdir
 from contextlib import contextmanager
-from typing import List
+from os import chdir, environ, getcwd, makedirs, path
 from shutil import rmtree
+from typing import List
 
-from mlflow.tracking import MlflowClient
+import pytest
 from mlflow.pyfunc import load_model
-from nubison_model.Model import Model, register, _package_list_from_file
+from mlflow.tracking import MlflowClient
+
+from nubison_model.Model import Model, _package_list_from_file, register
 
 
 @contextmanager

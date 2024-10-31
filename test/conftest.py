@@ -1,12 +1,13 @@
 import os
-import subprocess
-import time
-import tempfile
-import pytest
-from pathlib import Path
 import socket
-import requests
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
 import psutil
+import pytest
+import requests
 
 
 def find_free_port():
