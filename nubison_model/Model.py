@@ -1,8 +1,8 @@
 import mlflow
 
-from os import getenv
+from os import getenv, path
 from sys import version_info as py_version_info
-from typing import Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable, List
 from importlib.metadata import distributions
 from mlflow.pyfunc import PythonModel
 
@@ -18,20 +18,52 @@ class Model(Protocol):
     def infer(self, input: any) -> any: ...
 
 
+def _is_shareable(package: str) -> bool:
+    # Nested requirements, constraints files, local packages, and comments are not supported
+    if package.startswith(("-r", "-c", "-e .", "-e /", "/", ".", "#")):
+        return False
+    # Check if the package is a local package
+    # eg. git+file:///path/to/repo.git, file:///path/to/repo, -e file:///
+    if "file:" in package:
+        return False
+
+    return True
+
+
+def _package_list_from_file() -> Optional[List]:
+    # Check if the requirements file exists in order of priority
+    candidates = ["requirements-prod.txt", "requirements.txt"]
+    filename = next((file for file in candidates if path.exists(file)), None)
+
+    if filename is None:
+        return None
+
+    with open(filename, "r") as file:
+        packages = file.readlines()
+    packages = [package.strip() for package in packages if package.strip()]
+    # Remove not sharable dependencies
+    packages = [package for package in packages if _is_shareable(package)]
+
+    return packages
+
+
+def _package_list_from_env() -> List:
+    # Get the list of installed packages
+    return [
+        f"{dist.metadata['Name']}=={dist.version}"
+        for dist in distributions()
+        if dist.metadata["Name"]
+        is not None  # editable installs have a None metadata name
+    ]
+
+
 def _make_conda_env() -> dict:
     # Get the Python version
     python_version = (
         f"{py_version_info.major}.{py_version_info.minor}.{py_version_info.micro}"
     )
-    # Get the list of installed packages
-    packages_list = sorted(
-        [
-            f"{dist.metadata['Name']}=={dist.version}"
-            for dist in distributions()
-            if dist.metadata["Name"]
-            is not None  # editable installs have a None metadata name
-        ]
-    )
+    # Get the list of installed packages from the requirements file or environment
+    packages_list = _package_list_from_file() or _package_list_from_env()
 
     return {
         "dependencies": [
