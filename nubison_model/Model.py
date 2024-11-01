@@ -74,6 +74,23 @@ def _make_conda_env() -> dict:
     }
 
 
+def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
+    # Get the dict of artifact directories.
+    # If not provided, read from environment variables, else use the default
+    artifact_dirs_from_param_or_env = (
+        artifact_dirs
+        if artifact_dirs is not None
+        else getenv("ARTIFACT_DIRS", DEFAULT_ARTIFACT_DIRS)
+    )
+
+    # Return a dict with the directory as both the key and value
+    return {
+        dir.strip(): dir.strip()
+        for dir in artifact_dirs_from_param_or_env.split(",")
+        if dir != ""
+    }
+
+
 def _make_mlflow_model(nubison_model: Model) -> PythonModel:
 
     class MLflowModel(PythonModel):
@@ -113,13 +130,8 @@ def register(
         model_name = getenv("MODEL_NAME", DEFAULT_MODEL_NAME)
     if mlflow_uri is None:
         mlflow_uri = getenv("MLFLOW_TRACKING_URI", DEAFULT_MLFLOW_URI)
-    # Get the list of artifact directories.
-    # If not provided, read from environment variables, else use the default
-    artifact_dirs = artifact_dirs or getenv("ARTIFACT_DIRS", DEFAULT_ARTIFACT_DIRS)
-    artifact_dirs = {
-        dir.strip(): dir.strip() for dir in artifact_dirs.split(",") if dir != ""
-    }
 
+    # Set the MLflow tracking URI and experiment
     mlflow.set_tracking_uri(mlflow_uri)
     mlflow.set_experiment(model_name)
 
@@ -127,9 +139,9 @@ def register(
     with mlflow.start_run() as run:
         # Log the model to MLflow
         mlflow.pyfunc.log_model(
-            artifact_path="",
+            registered_model_name=model_name,
             python_model=_make_mlflow_model(model),
             conda_env=_make_conda_env(),
-            registered_model_name=model_name,
-            artifacts=artifact_dirs,
+            artifacts=_make_artifact_dir_dict(artifact_dirs),
+            artifact_path="",
         )

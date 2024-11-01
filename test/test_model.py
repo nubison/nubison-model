@@ -1,13 +1,18 @@
 from contextlib import contextmanager
 from os import chdir, environ, getcwd, makedirs, path
 from shutil import rmtree
-from typing import List
+from typing import List, Optional
 
 import pytest
 from mlflow.pyfunc import load_model
 from mlflow.tracking import MlflowClient
 
-from nubison_model.Model import Model, _package_list_from_file, register
+from nubison_model.Model import (
+    Model,
+    _make_artifact_dir_dict,
+    _package_list_from_file,
+    register,
+)
 
 
 @contextmanager
@@ -37,8 +42,9 @@ def temporary_cwd(new_dir):
 
 
 @contextmanager
-def temporary_artifact_env(artifact_dirs):
-    environ["ARTIFACT_DIRS"] = ",".join(artifact_dirs)
+def temporary_artifact_env(artifact_dirs: Optional[List[str]] = None):
+    if artifact_dirs is not None:
+        environ["ARTIFACT_DIRS"] = ",".join(artifact_dirs)
     yield
     environ["ARTIFACT_DIRS"] = ""
 
@@ -137,3 +143,16 @@ def test_package_list_from_file():
             "-e git+ssh://git@github.com/nubison/nubison-model.git",
             "package_name @ git+https://git.example.com/MyProject",
         ]
+
+
+def test_artifact_dirs_from_env():
+    """
+    Test creating the artifact directories dictionary from the environment or parameter.
+    """
+    with temporary_artifact_env():
+        assert _make_artifact_dir_dict(None) == {}
+        assert _make_artifact_dir_dict("src, test") == {"src": "src", "test": "test"}
+
+    with temporary_artifact_env(["src"]):
+        assert _make_artifact_dir_dict(None) == {"src": "src"}
+        assert _make_artifact_dir_dict("src,test") == {"src": "src", "test": "test"}
