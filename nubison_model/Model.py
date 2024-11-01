@@ -1,7 +1,7 @@
 from importlib.metadata import distributions
 from os import getenv, path
 from sys import version_info as py_version_info
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, runtime_checkable
 
 import mlflow
 from mlflow.pyfunc import PythonModel
@@ -15,7 +15,7 @@ DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
 class Model(Protocol):
     def load_model(self) -> None: ...
 
-    def infer(self, input: any) -> any: ...
+    def infer(self, input: Any) -> Any: ...
 
 
 def _is_shareable(package: str) -> bool:
