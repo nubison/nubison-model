@@ -114,11 +114,11 @@ def test_model_load_artifact_code(mlflow_server):
             with open("./fixtures/bar.txt", "r") as f:
                 self.loaded = f.read()
 
-        def infer(self, input):
+        def infer(self, param1):
             # Try to import a function from the artifact code
             from fixtures.poo import echo
 
-            return echo(self.loaded + input)
+            return echo(self.loaded + param1)
 
     # Switch cwd to the current file directory to register the fixture artifact
     with temporary_cwd("test"):
@@ -128,7 +128,7 @@ def test_model_load_artifact_code(mlflow_server):
     # So artifact symlink not to coliide with the current directory
     with temporary_dirs(["infer"]), temporary_cwd("infer"):
         model = load_model(f"models:/{model_name}/latest")
-        assert model.predict("test") == "bartest"
+        assert model.predict({"input": {"param1": "test"}}) == "bartest"
 
 
 def test_package_list_from_file():
