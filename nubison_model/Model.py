@@ -4,11 +4,13 @@ from sys import version_info as py_version_info
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
 import mlflow
+from mlflow.models.model import ModelInfo
 from mlflow.pyfunc import PythonModel
 
 DEFAULT_MODEL_NAME = "nubison_model"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
+DEFAULT_MODEL_CONFIG = {"initialize": True}
 
 
 @runtime_checkable
@@ -92,10 +94,21 @@ def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
 
 
 def _make_mlflow_model(nubison_model: Model) -> PythonModel:
+    class NubisonMLFlowModel(PythonModel):
+        _nubison_model: Model = nubison_model
 
-    class MLflowModel(PythonModel):
         def load_context(self, context):
+            """Make the MLFlow artifact is accessible to the model in the same way as in the local environment
+
+            Args:
+                context (PythonModelContext): A collection of artifacts that a PythonModel can use when performing inference.
+            """
             from os import path, symlink
+
+            load_model = context.model_config.get("initialize", True)
+            if not load_model:
+                print("Skipping model loading")
+                return
 
             for name, target_path in context.artifacts.items():
                 # Create the symbolic link with the key as the symlink name
@@ -107,13 +120,16 @@ def _make_mlflow_model(nubison_model: Model) -> PythonModel:
                 except OSError as e:
                     print(f"Error creating symlink for {name}: {e}")
 
-            nubison_model.load_model()
+            self._nubison_model.load_model()
 
         def predict(self, context, model_input):
             input = model_input["input"]
             return self._nubison_model.infer(**input)
 
-    return MLflowModel()
+        def get_nubison_model(self):
+            return self._nubison_model
+
+    return NubisonMLFlowModel()
 
 
 def register(
@@ -139,10 +155,13 @@ def register(
     # Start a new MLflow run
     with mlflow.start_run() as run:
         # Log the model to MLflow
-        mlflow.pyfunc.log_model(
+        model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=model_name,
             python_model=_make_mlflow_model(model),
             conda_env=_make_conda_env(),
             artifacts=_make_artifact_dir_dict(artifact_dirs),
+            model_config=DEFAULT_MODEL_CONFIG,
             artifact_path="",
         )
+
+        return model_info.model_uri

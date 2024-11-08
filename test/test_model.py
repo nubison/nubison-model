@@ -1,11 +1,9 @@
-from contextlib import contextmanager
-from os import chdir, environ, getcwd, makedirs, path
-from shutil import rmtree
-from typing import List, Optional
+from os import path
 
 import pytest
 from mlflow.pyfunc import load_model
 from mlflow.tracking import MlflowClient
+from utils import temporary_cwd, temporary_dirs, temporary_env
 
 from nubison_model.Model import (
     Model,
@@ -13,40 +11,6 @@ from nubison_model.Model import (
     _package_list_from_file,
     register,
 )
-
-
-@contextmanager
-def temporary_dirs(dirs: List[str]):
-    dirs = [path.join(getcwd(), src_dir) for src_dir in dirs]
-
-    try:
-        for dir in dirs:
-            makedirs(dir, exist_ok=True)
-
-        yield dirs
-
-    finally:
-        for dir in dirs:
-            if path.exists(dir):
-                rmtree(dir)
-
-
-@contextmanager
-def temporary_cwd(new_dir):
-    original_dir = getcwd()
-    try:
-        chdir(new_dir)
-        yield
-    finally:
-        chdir(original_dir)
-
-
-@contextmanager
-def temporary_artifact_env(artifact_dirs: Optional[List[str]] = None):
-    if artifact_dirs is not None:
-        environ["ARTIFACT_DIRS"] = ",".join(artifact_dirs)
-    yield
-    environ["ARTIFACT_DIRS"] = ""
 
 
 def test_register_model(mlflow_server):
@@ -61,7 +25,9 @@ def test_register_model(mlflow_server):
 
     # configure the code directories
     artifact_dirs = ["src1", "src2"]
-    with temporary_dirs(artifact_dirs), temporary_artifact_env(artifact_dirs):
+    with temporary_dirs(artifact_dirs), temporary_env(
+        {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
+    ):
         # Register the model
         register(DummyModel(), model_name=model_name, mlflow_uri=mlflow_server)
 
@@ -149,10 +115,10 @@ def test_artifact_dirs_from_env():
     """
     Test creating the artifact directories dictionary from the environment or parameter.
     """
-    with temporary_artifact_env():
+    with temporary_env({"ARTIFACT_DIRS": ""}):
         assert _make_artifact_dir_dict(None) == {}
         assert _make_artifact_dir_dict("src, test") == {"src": "src", "test": "test"}
 
-    with temporary_artifact_env(["src"]):
+    with temporary_env({"ARTIFACT_DIRS": "src"}):
         assert _make_artifact_dir_dict(None) == {"src": "src"}
         assert _make_artifact_dir_dict("src,test") == {"src": "src", "test": "test"}
