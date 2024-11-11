@@ -17,6 +17,10 @@ def load_nubison_model(
 ):
 
     try:
+        if not mlflow_tracking_uri:
+            raise RuntimeError("MLflow tracking URI is not set")
+        if not mlflow_model_uri:
+            raise RuntimeError("MLflow model URI is not set")
         set_tracking_uri(mlflow_tracking_uri)
         mlflow_model = load_model(
             model_uri=mlflow_model_uri, model_config={"initialize": initialize}
