@@ -34,9 +34,13 @@ def load_nubison_model(
     return nubison_model
 
 
-def make_inference_service_class():
-    mlflow_tracking_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI) or ""
-    mlflow_model_uri = getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
+def make_inference_service_class(
+    mlflow_tracking_uri: Optional[str] = None, mlflow_model_uri: Optional[str] = None
+):
+    mlflow_tracking_uri = (
+        mlflow_tracking_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or ""
+    )
+    mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
     nubison_model_class = load_nubison_model(
         mlflow_tracking_uri=mlflow_tracking_uri,
