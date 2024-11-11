@@ -32,8 +32,11 @@ def temporary_cwd(new_dir):
 
 @contextmanager
 def temporary_env(env: dict):
+    original_env = environ.copy()
     for key, value in env.items():
         environ[key] = value
+
     yield
-    for key in env.keys():
-        del environ[key]
+
+    environ.clear()
+    environ.update(original_env)
