@@ -7,6 +7,8 @@ import mlflow
 from mlflow.models.model import ModelInfo
 from mlflow.pyfunc import PythonModel
 
+ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
+ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
 DEFAULT_MODEL_NAME = "nubison_model"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
@@ -14,7 +16,7 @@ DEFAULT_MODEL_CONFIG = {"initialize": True}
 
 
 @runtime_checkable
-class Model(Protocol):
+class NubisonModel(Protocol):
     def load_model(self) -> None: ...
 
     def infer(self, input: Any) -> Any: ...
@@ -93,9 +95,9 @@ def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
     }
 
 
-def _make_mlflow_model(nubison_model: Model) -> PythonModel:
+def _make_mlflow_model(nubison_model: NubisonModel) -> PythonModel:
     class NubisonMLFlowModel(PythonModel):
-        _nubison_model: Model = nubison_model
+        _nubison_model: NubisonModel = nubison_model
 
         def load_context(self, context):
             """Make the MLFlow artifact is accessible to the model in the same way as in the local environment
@@ -133,20 +135,20 @@ def _make_mlflow_model(nubison_model: Model) -> PythonModel:
 
 
 def register(
-    model: Model,
+    model: NubisonModel,
     model_name: Optional[str] = None,
     mlflow_uri: Optional[str] = None,
     artifact_dirs: Optional[str] = None,
 ):
     # Check if the model implements the Model protocol
-    if not isinstance(model, Model):
+    if not isinstance(model, NubisonModel):
         raise TypeError("The model must implement the Model protocol")
 
     # Get the model name and MLflow URI from environment variables if not provided
     if model_name is None:
         model_name = getenv("MODEL_NAME", DEFAULT_MODEL_NAME)
     if mlflow_uri is None:
-        mlflow_uri = getenv("MLFLOW_TRACKING_URI", DEAFULT_MLFLOW_URI)
+        mlflow_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI, DEAFULT_MLFLOW_URI)
 
     # Set the MLflow tracking URI and experiment
     mlflow.set_tracking_uri(mlflow_uri)

@@ -5,12 +5,8 @@ from mlflow.pyfunc import load_model
 from mlflow.tracking import MlflowClient
 from utils import temporary_cwd, temporary_dirs, temporary_env
 
-from nubison_model.Model import (
-    Model,
-    _make_artifact_dir_dict,
-    _package_list_from_file,
-    register,
-)
+from nubison_model import NubisonModel, register
+from nubison_model.Model import _make_artifact_dir_dict, _package_list_from_file
 
 
 def test_register_model(mlflow_server):
@@ -20,7 +16,7 @@ def test_register_model(mlflow_server):
     model_name = "TestRegisteredModel"
 
     # define a simple model (for example purposes, using a dummy model)
-    class DummyModel(Model):
+    class DummyModel(NubisonModel):
         pass
 
     # configure the code directories
@@ -55,7 +51,7 @@ def test_throw_on_model_not_implementing_protocol(mlflow_server):
     class WrongModel:
         pass
 
-    class RightModel(Model):
+    class RightModel(NubisonModel):
         def load_model(self):
             pass
 
@@ -74,7 +70,7 @@ def test_model_load_artifact_code(mlflow_server):
     """
     model_name = "TestRegisteredModel"
 
-    class DummyModel(Model):
+    class DummyModel(NubisonModel):
         def load_model(self):
             # Try to read the contents of the artifact file
             with open("./fixtures/bar.txt", "r") as f:

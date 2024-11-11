@@ -6,8 +6,7 @@ import bentoml
 from mlflow import set_tracking_uri
 from mlflow.pyfunc import load_model
 
-ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
-ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
+from nubison_model.Model import ENV_VAR_MLFLOW_MODEL_URI, ENV_VAR_MLFLOW_TRACKING_URI
 
 
 def load_nubison_model(
@@ -34,7 +33,7 @@ def load_nubison_model(
     return nubison_model
 
 
-def make_inference_service_class(
+def build_inference_service(
     mlflow_tracking_uri: Optional[str] = None, mlflow_model_uri: Optional[str] = None
 ):
     mlflow_tracking_uri = (
@@ -49,7 +48,7 @@ def make_inference_service_class(
     ).__class__
 
     @bentoml.service
-    class Service:
+    class BentoMLService:
         """BentoML Service for serving machine learning models."""
 
         _nubison_model = None
@@ -86,7 +85,7 @@ def make_inference_service_class(
 
             return self._nubison_model.infer(*args, **kwargs)
 
-    return Service
+    return BentoMLService
 
 
 # Make BentoService if the script is loaded by BentoML
@@ -94,4 +93,4 @@ def make_inference_service_class(
 # The model registry URI and model URI should be set as environment variables
 loaded_by_bentoml = any(var.startswith("BENTOML_") for var in environ)
 if loaded_by_bentoml:
-    InferenceService = make_inference_service_class()
+    InferenceService = build_inference_service()

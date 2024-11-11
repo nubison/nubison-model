@@ -1,10 +1,13 @@
 from os import environ
 
-from mlflow.pyfunc import load_model
 from utils import temporary_cwd, temporary_dirs, temporary_env
 
-from nubison_model.Model import Model, register
-from nubison_model.Service import make_inference_service_class
+from nubison_model import (
+    ENV_VAR_MLFLOW_MODEL_URI,
+    NubisonModel,
+    build_inference_service,
+    register,
+)
 
 
 def test_register_and_serve_model(mlflow_server):
@@ -12,7 +15,7 @@ def test_register_and_serve_model(mlflow_server):
     Test registering a model to MLflow's Model Registry and serving it with BentoML.
     """
 
-    class DummyModel(Model):
+    class DummyModel(NubisonModel):
         def load_model(self):
             # Try to read the contents of the artifact file
             with open("./fixtures/bar.txt", "r") as f:
@@ -31,7 +34,7 @@ def test_register_and_serve_model(mlflow_server):
     # Create temp dir and switch to it to test the model.
     # So artifact symlink not to coliide with the current directory
     with temporary_dirs(["infer"]), temporary_cwd("infer"), temporary_env(
-        {"MLFLOW_MODEL_URI": model_uri}
+        {ENV_VAR_MLFLOW_MODEL_URI: model_uri}
     ):
-        bento_service = make_inference_service_class()()
+        bento_service = build_inference_service()()
         assert bento_service.infer("test") == "bartest"

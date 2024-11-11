@@ -9,6 +9,8 @@ import psutil
 import pytest
 import requests
 
+from nubison_model import ENV_VAR_MLFLOW_TRACKING_URI
+
 
 def find_free_port():
     """
@@ -48,7 +50,7 @@ def mlflow_server():
     # Define MLflow server URI and port
     port = find_free_port()
     mlflow_uri = f"http://127.0.0.1:{port}"
-    os.environ["MLFLOW_TRACKING_URI"] = mlflow_uri
+    os.environ[ENV_VAR_MLFLOW_TRACKING_URI] = mlflow_uri
 
     # Start MLflow server as a subprocess
     cmd = [
