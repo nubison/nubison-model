@@ -29,7 +29,7 @@ def test_register_model(mlflow_server):
         {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
     ):
         # Register the model
-        register(DummyModel(), model_name=model_name, mlflow_uri=mlflow_server)
+        register(DummyModel(), model_name=model_name)
 
     client = MlflowClient()
 

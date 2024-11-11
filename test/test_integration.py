@@ -31,7 +31,7 @@ def test_register_and_serve_model(mlflow_server):
     # Create temp dir and switch to it to test the model.
     # So artifact symlink not to coliide with the current directory
     with temporary_dirs(["infer"]), temporary_cwd("infer"), temporary_env(
-        {"MLFLOW_TRACKING_URI": mlflow_server, "MLFLOW_MODEL_URI": model_uri}
+        {"MLFLOW_MODEL_URI": model_uri}
     ):
         bento_service = make_inference_service_class()()
         assert bento_service.infer("test") == "bartest"
