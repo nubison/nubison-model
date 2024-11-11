@@ -31,14 +31,6 @@ def temporary_cwd(new_dir):
 
 
 @contextmanager
-def temporary_artifact_env(artifact_dirs: Optional[List[str]] = None):
-    if artifact_dirs is not None:
-        environ["ARTIFACT_DIRS"] = ",".join(artifact_dirs)
-    yield
-    environ["ARTIFACT_DIRS"] = ""
-
-
-@contextmanager
 def temporary_env(env: dict):
     for key, value in env.items():
         environ[key] = value
