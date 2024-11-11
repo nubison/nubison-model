@@ -9,7 +9,7 @@ from mlflow.pyfunc import PythonModel
 
 ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
 ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
-DEFAULT_MODEL_NAME = "nubison_model"
+DEFAULT_MODEL_NAME = "Default"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
 DEFAULT_MODEL_CONFIG = {"initialize": True}
