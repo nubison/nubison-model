@@ -1,16 +1,21 @@
+from contextlib import contextmanager
 from functools import wraps
 from os import environ, getenv
+from tempfile import TemporaryDirectory
 from typing import Optional
+from unittest.mock import patch
 
 import bentoml
 from mlflow import set_tracking_uri
 from mlflow.pyfunc import load_model
+from starlette.testclient import TestClient
 
 from nubison_model.Model import (
     DEAFULT_MLFLOW_URI,
     ENV_VAR_MLFLOW_MODEL_URI,
     ENV_VAR_MLFLOW_TRACKING_URI,
 )
+from nubison_model.utils import temporary_cwd
 
 
 def load_nubison_model(
@@ -35,6 +40,20 @@ def load_nubison_model(
         ) from e
 
     return nubison_model
+
+
+@contextmanager
+def test_client(model_uri):
+    app = build_inference_service(mlflow_model_uri=model_uri)
+    # Disable metrics for testing. Avoids Prometheus client duplicated registration error
+    app.config["metrics"] = {"enabled": False}
+
+    # Create a temporary directory and set it as the current working directory to run tests
+    # To avoid model initialization conflicts with the current directory
+    test_dir = TemporaryDirectory()
+    with temporary_cwd(test_dir.name), TestClient(app.to_asgi()) as client:
+
+        yield client
 
 
 def build_inference_service(

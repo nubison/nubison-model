@@ -1,7 +1,9 @@
 from contextlib import contextmanager
-from os import chdir, environ, getcwd, makedirs, path
+from os import environ, getcwd, makedirs, path
 from shutil import rmtree
-from typing import List, Optional
+from typing import List
+
+from nubison_model.utils import temporary_cwd
 
 
 @contextmanager
@@ -21,16 +23,6 @@ def temporary_dirs(dirs: List[str]):
 
 
 @contextmanager
-def temporary_cwd(new_dir):
-    original_dir = getcwd()
-    try:
-        chdir(new_dir)
-        yield
-    finally:
-        chdir(original_dir)
-
-
-@contextmanager
 def temporary_env(env: dict):
     original_env = environ.copy()
     for key, value in env.items():
@@ -40,3 +32,6 @@ def temporary_env(env: dict):
 
     environ.clear()
     environ.update(original_env)
+
+
+__all__ = ["temporary_cwd", "temporary_dirs", "temporary_env"]
