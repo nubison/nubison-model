@@ -117,7 +117,7 @@ def _make_mlflow_model(nubison_model: NubisonModel) -> PythonModel:
                     symlink(
                         target_path, name, target_is_directory=path.isdir(target_path)
                     )
-                    print(f"Created symlink: {name} -> {target_path}")
+                    print(f"Prepared artifact: {name} -> {target_path}")
                 except OSError as e:
                     print(f"Error creating symlink for {name}: {e}")
 
