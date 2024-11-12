@@ -109,7 +109,6 @@ def _make_mlflow_model(nubison_model: NubisonModel) -> PythonModel:
 
             load_model = context.model_config.get("initialize", True)
             if not load_model:
-                print("Skipping model loading")
                 return
 
             for name, target_path in context.artifacts.items():
