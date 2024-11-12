@@ -3,7 +3,6 @@ import socket
 import subprocess
 import tempfile
 import time
-from http import server
 from pathlib import Path
 
 import psutil
