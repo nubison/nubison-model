@@ -23,3 +23,9 @@ types-psutil = "^6.1.0.20241022"
 
 [tool.poetry-dynamic-versioning]
 enable = true
+
+[tool.isort]
+profile = "black"  # or your preferred profile
+known_first_party = ["test"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+default_section = "THIRDPARTY"

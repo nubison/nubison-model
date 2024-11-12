@@ -3,10 +3,10 @@ from os import path
 import pytest
 from mlflow.pyfunc import load_model
 from mlflow.tracking import MlflowClient
-from utils import temporary_cwd, temporary_dirs, temporary_env
 
 from nubison_model import NubisonModel, register
 from nubison_model.Model import _make_artifact_dir_dict, _package_list_from_file
+from test.utils import temporary_cwd, temporary_dirs, temporary_env
 
 
 def test_register_model(mlflow_server):
@@ -78,7 +78,7 @@ def test_model_load_artifact_code(mlflow_server):
 
         def infer(self, param1):
             # Try to import a function from the artifact code
-            from fixtures.poo import echo
+            from .fixtures.poo import echo
 
             return echo(self.loaded + param1)
 

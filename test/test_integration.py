@@ -1,13 +1,10 @@
-from os import environ
-
-from utils import temporary_cwd, temporary_dirs, temporary_env
-
 from nubison_model import (
     ENV_VAR_MLFLOW_MODEL_URI,
     NubisonModel,
     build_inference_service,
     register,
 )
+from test.utils import temporary_cwd, temporary_dirs, temporary_env
 
 
 def test_register_and_serve_model(mlflow_server):
@@ -23,7 +20,7 @@ def test_register_and_serve_model(mlflow_server):
 
         def infer(self, param1: str):
             # Try to import a function from the artifact code
-            from fixtures.poo import echo
+            from .fixtures.poo import echo
 
             return echo(self.loaded + param1)
 
