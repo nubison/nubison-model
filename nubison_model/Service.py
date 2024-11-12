@@ -6,7 +6,11 @@ import bentoml
 from mlflow import set_tracking_uri
 from mlflow.pyfunc import load_model
 
-from nubison_model.Model import ENV_VAR_MLFLOW_MODEL_URI, ENV_VAR_MLFLOW_TRACKING_URI
+from nubison_model.Model import (
+    DEAFULT_MLFLOW_URI,
+    ENV_VAR_MLFLOW_MODEL_URI,
+    ENV_VAR_MLFLOW_TRACKING_URI,
+)
 
 
 def load_nubison_model(
@@ -37,7 +41,7 @@ def build_inference_service(
     mlflow_tracking_uri: Optional[str] = None, mlflow_model_uri: Optional[str] = None
 ):
     mlflow_tracking_uri = (
-        mlflow_tracking_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or ""
+        mlflow_tracking_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or DEAFULT_MLFLOW_URI
     )
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
