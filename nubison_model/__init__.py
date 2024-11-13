@@ -8,7 +8,7 @@ from .Model import (
     NubisonModel,
     register,
 )
-from .Service import build_inference_service
+from .Service import build_inference_service, test_client
 
 __all__ = [
     "ENV_VAR_MLFLOW_MODEL_URI",
@@ -16,4 +16,5 @@ __all__ = [
     "NubisonModel",
     "register",
     "build_inference_service",
+    "test_client",
 ]
