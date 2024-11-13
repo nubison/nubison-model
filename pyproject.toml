@@ -23,6 +23,17 @@ types-psutil = "^6.1.0.20241022"
 
 [tool.poetry-dynamic-versioning]
 enable = true
+format-jinja = """
+    {%- if distance == 0 and not dirty -%}
+        {{ serialize_pep440(base, stage, revision) }}
+    {%- elif revision is not none and not dirty -%}
+        {{ serialize_pep440(base, stage, revision + 1, dev=distance, metadata=[commit]) }}
+    {%- elif not dirty -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit]) }}
+    {%- else -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit, timestamp]) }}
+    {%- endif -%}
+"""
 
 [tool.isort]
 profile = "black"  # or your preferred profile
