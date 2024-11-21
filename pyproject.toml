@@ -20,6 +20,7 @@ tox = "^4.0"
 psutil = "^6.1.0"
 types-requests = "^2.32.0.20241016"
 types-psutil = "^6.1.0.20241022"
+ipykernel = "^6.29.5"
 
 [tool.poetry-dynamic-versioning]
 enable = true
