@@ -138,6 +138,8 @@ def register(
     model_name: Optional[str] = None,
     mlflow_uri: Optional[str] = None,
     artifact_dirs: Optional[str] = None,
+    params: Optional[dict[str, Any]] = None,
+    metrics: Optional[dict[str, float]] = None,
 ):
     # Check if the model implements the Model protocol
     if not isinstance(model, NubisonModel):
@@ -155,6 +157,12 @@ def register(
 
     # Start a new MLflow run
     with mlflow.start_run() as run:
+        # Log parameters and metrics
+        if params:
+            mlflow.log_params(params)
+        if metrics:
+            mlflow.log_metrics(metrics)
+
         # Log the model to MLflow
         model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=model_name,
