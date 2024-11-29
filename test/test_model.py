@@ -118,3 +118,39 @@ def test_artifact_dirs_from_env():
     with temporary_env({"ARTIFACT_DIRS": "src"}):
         assert _make_artifact_dir_dict(None) == {"src": "src"}
         assert _make_artifact_dir_dict("src,test") == {"src": "src", "test": "test"}
+
+
+def test_log_params_and_metrics(mlflow_server):
+    """
+    Test logging parameters and metrics to MLflow.
+    """
+    model_name = "TestLoggedModel"
+
+    class DummyModel(NubisonModel):
+        pass
+
+    # Test parameters and metrics
+    test_params = {"param1": "value1", "param2": "value2"}
+    test_metrics = {"metric1": 1.0, "metric2": 2.0}
+
+    # Register model with params and metrics
+    model_uri = register(
+        DummyModel(),
+        model_name=model_name,
+        params=test_params,
+        metrics=test_metrics,
+    )
+
+    # Extract run_id from model_uri (format: "runs:/run_id/path")
+    run_id = model_uri.split("/")[1]
+
+    # Get the run information from MLflow
+    client = MlflowClient()
+    run = client.get_run(run_id)
+
+    assert set(test_params.items()) <= set(
+        run.data.params.items()
+    ), "Not all parameters were logged correctly"
+    assert set(test_metrics.items()) <= set(
+        run.data.metrics.items()
+    ), "Not all metrics were logged correctly"
