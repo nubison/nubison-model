@@ -12,7 +12,6 @@ ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
 DEFAULT_MODEL_NAME = "Default"
 DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
-DEFAULT_MODEL_CONFIG = {"initialize": True}
 
 
 @runtime_checkable
@@ -20,6 +19,53 @@ class NubisonModel(Protocol):
     def load_model(self) -> None: ...
 
     def infer(self, input: Any) -> Any: ...
+
+
+class NubisonMLFlowModel(PythonModel):
+    def __init__(self, nubison_model: NubisonModel):
+        self._nubison_model = nubison_model
+
+    def _check_artifacts_prepared(self) -> bool:
+        """Check if all symlinks for the artifacts are created successfully."""
+        for name, target_path in self._artifacts.items():
+            if not path.exists(name):
+                print(f"Symlink for {name} was not created successfully.")
+                return False
+
+        return True
+
+    def prepare_artifacts(self) -> None:
+        """Create symbolic links for the artifacts stored in the _artifacts attribute."""
+        from os import path, symlink
+
+        for name, target_path in self._artifacts.items():
+            try:
+                symlink(target_path, name, target_is_directory=path.isdir(target_path))
+                print(f"Prepared artifact: {name} -> {target_path}")
+            except OSError as e:
+                print(f"Error creating symlink for {name}: {e}")
+
+    def load_context(self, context: Any) -> None:
+        """Make the MLFlow artifact is accessible to the model in the same way as in the local environment
+
+        Args:
+            context (PythonModelContext): A collection of artifacts that a PythonModel can use when performing inference.
+        """
+        # Check if symlinks are made and proceed if all symlinks are ok
+        self._artifacts = context.artifacts
+
+        if not self._check_artifacts_prepared():
+            print("Artifacts were not prepared. Skipping model loading.")
+            return
+
+        self._nubison_model.load_model()
+
+    def predict(self, context, model_input):
+        input = model_input["input"]
+        return self._nubison_model.infer(**input)
+
+    def get_nubison_model(self):
+        return self._nubison_model
 
 
 def _is_shareable(package: str) -> bool:
@@ -95,44 +141,6 @@ def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
     }
 
 
-def _make_mlflow_model(nubison_model: NubisonModel) -> PythonModel:
-    class NubisonMLFlowModel(PythonModel):
-        _nubison_model: NubisonModel = nubison_model
-
-        def load_context(self, context):
-            """Make the MLFlow artifact is accessible to the model in the same way as in the local environment
-
-            Args:
-                context (PythonModelContext): A collection of artifacts that a PythonModel can use when performing inference.
-            """
-            from os import path, symlink
-
-            load_model = context.model_config.get("initialize", True)
-            if not load_model:
-                return
-
-            for name, target_path in context.artifacts.items():
-                # Create the symbolic link with the key as the symlink name
-                try:
-                    symlink(
-                        target_path, name, target_is_directory=path.isdir(target_path)
-                    )
-                    print(f"Prepared artifact: {name} -> {target_path}")
-                except OSError as e:
-                    print(f"Error creating symlink for {name}: {e}")
-
-            self._nubison_model.load_model()
-
-        def predict(self, context, model_input):
-            input = model_input["input"]
-            return self._nubison_model.infer(**input)
-
-        def get_nubison_model(self):
-            return self._nubison_model
-
-    return NubisonMLFlowModel()
-
-
 def register(
     model: NubisonModel,
     model_name: Optional[str] = None,
@@ -166,10 +174,9 @@ def register(
         # Log the model to MLflow
         model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=model_name,
-            python_model=_make_mlflow_model(model),
+            python_model=NubisonMLFlowModel(model),
             conda_env=_make_conda_env(),
             artifacts=_make_artifact_dir_dict(artifact_dirs),
-            model_config=DEFAULT_MODEL_CONFIG,
             artifact_path="",
         )
 
