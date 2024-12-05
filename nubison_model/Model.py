@@ -46,7 +46,7 @@ class NubisonMLFlowModel(PythonModel):
                 print(f"Error creating symlink for {name}: {e}")
 
     def load_context(self, context: Any) -> None:
-        """Make the MLFlow artifact is accessible to the model in the same way as in the local environment
+        """Make the MLFlow artifact accessible to the model in the same way as in the local environment
 
         Args:
             context (PythonModelContext): A collection of artifacts that a PythonModel can use when performing inference.
