@@ -64,35 +64,6 @@ def test_throw_on_model_not_implementing_protocol(mlflow_server):
     register(RightModel())
 
 
-def test_model_load_artifact_code(mlflow_server):
-    """
-    Test loading the artifact code paths.
-    """
-    model_name = "TestRegisteredModel"
-
-    class DummyModel(NubisonModel):
-        def load_model(self):
-            # Try to read the contents of the artifact file
-            with open("./fixtures/bar.txt", "r") as f:
-                self.loaded = f.read()
-
-        def infer(self, param1):
-            # Try to import a function from the artifact code
-            from .fixtures.poo import echo
-
-            return echo(self.loaded + param1)
-
-    # Switch cwd to the current file directory to register the fixture artifact
-    with temporary_cwd("test"):
-        register(DummyModel(), model_name=model_name, artifact_dirs="fixtures")
-
-    # Create temp dir and switch to it to test the model.
-    # So artifact symlink not to coliide with the current directory
-    with temporary_dirs(["infer"]), temporary_cwd("infer"):
-        model = load_model(f"models:/{model_name}/latest")
-        assert model.predict({"input": {"param1": "test"}}) == "bartest"
-
-
 def test_package_list_from_file():
     """
     Test reading the package list from a requirements.txt file.

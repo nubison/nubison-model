@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from functools import wraps
 from os import environ, getenv
 from tempfile import TemporaryDirectory
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import patch
 
 import bentoml
@@ -14,6 +14,7 @@ from nubison_model.Model import (
     DEAFULT_MLFLOW_URI,
     ENV_VAR_MLFLOW_MODEL_URI,
     ENV_VAR_MLFLOW_TRACKING_URI,
+    NubisonMLFlowModel,
 )
 from nubison_model.utils import temporary_cwd
 
@@ -21,7 +22,7 @@ from nubison_model.utils import temporary_cwd
 def load_nubison_model(
     mlflow_tracking_uri,
     mlflow_model_uri,
-    initialize: bool,
+    prepare_artifacts: bool = False,
 ):
 
     try:
@@ -30,10 +31,16 @@ def load_nubison_model(
         if not mlflow_model_uri:
             raise RuntimeError("MLflow model URI is not set")
         set_tracking_uri(mlflow_tracking_uri)
-        mlflow_model = load_model(
-            model_uri=mlflow_model_uri, model_config={"initialize": initialize}
+        mlflow_model = load_model(model_uri=mlflow_model_uri)
+
+        nubison_mlflow_model = cast(
+            NubisonMLFlowModel, mlflow_model.unwrap_python_model()
         )
-        nubison_model = mlflow_model.unwrap_python_model().get_nubison_model()
+        if prepare_artifacts:
+            nubison_mlflow_model.prepare_artifacts()
+
+        # Get the NubisonModel instance from the MLflow model
+        nubison_model = nubison_mlflow_model.get_nubison_model()
     except Exception as e:
         raise RuntimeError(
             f"Error loading model(uri: {mlflow_model_uri}) from model registry(uri: {mlflow_tracking_uri})"
@@ -67,7 +74,7 @@ def build_inference_service(
     nubison_model_class = load_nubison_model(
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_model_uri=mlflow_model_uri,
-        initialize=False,
+        prepare_artifacts=True,
     ).__class__
 
     @bentoml.service
@@ -88,7 +95,7 @@ def build_inference_service(
             self._nubison_model = load_nubison_model(
                 mlflow_tracking_uri=mlflow_tracking_uri,
                 mlflow_model_uri=mlflow_model_uri,
-                initialize=True,
+                prepare_artifacts=False,
             )
 
         @bentoml.api
