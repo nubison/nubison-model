@@ -6,7 +6,12 @@ from mlflow.tracking import MlflowClient
 
 from nubison_model import NubisonModel, register
 from nubison_model.Model import _make_artifact_dir_dict, _package_list_from_file
-from test.utils import temporary_cwd, temporary_dirs, temporary_env
+from test.utils import (
+    get_run_id_from_model_uri,
+    temporary_cwd,
+    temporary_dirs,
+    temporary_env,
+)
 
 
 def test_register_model(mlflow_server):
@@ -25,7 +30,8 @@ def test_register_model(mlflow_server):
         {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
     ):
         # Register the model
-        register(DummyModel(), model_name=model_name)
+        model_id = register(DummyModel(), model_name=model_name)
+        run_id = get_run_id_from_model_uri(model_id)
 
     client = MlflowClient()
 
@@ -34,8 +40,7 @@ def test_register_model(mlflow_server):
     assert registered_model.name == model_name
 
     # assert that the model has the correct code paths
-    model_versions = client.get_latest_versions(model_name)
-    artifact_path = client.download_artifacts(model_versions[0].run_id, "")
+    artifact_path = client.download_artifacts(run_id, "")
     for dir in artifact_dirs:
         assert path.exists(path.join(artifact_path, "artifacts", dir))
 
@@ -112,8 +117,7 @@ def test_log_params_and_metrics(mlflow_server):
         metrics=test_metrics,
     )
 
-    # Extract run_id from model_uri (format: "runs:/run_id/path")
-    run_id = model_uri.split("/")[1]
+    run_id = get_run_id_from_model_uri(model_uri)
 
     # Get the run information from MLflow
     client = MlflowClient()
