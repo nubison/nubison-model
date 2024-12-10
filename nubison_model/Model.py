@@ -1,5 +1,5 @@
 from importlib.metadata import distributions
-from os import getenv, path
+from os import getenv, path, symlink
 from sys import version_info as py_version_info
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
@@ -25,20 +25,20 @@ class NubisonMLFlowModel(PythonModel):
     def __init__(self, nubison_model: NubisonModel):
         self._nubison_model = nubison_model
 
-    def _check_artifacts_prepared(self) -> bool:
+    def _check_artifacts_prepared(self, artifacts: dict) -> bool:
         """Check if all symlinks for the artifacts are created successfully."""
-        for name, target_path in self._artifacts.items():
+        for name, target_path in artifacts.items():
             if not path.exists(name):
-                print(f"Symlink for {name} was not created successfully.")
                 return False
-
         return True
 
-    def prepare_artifacts(self) -> None:
-        """Create symbolic links for the artifacts stored in the _artifacts attribute."""
-        from os import path, symlink
+    def prepare_artifacts(self, artifacts: dict) -> None:
+        """Create symbolic links for the artifacts provided as a parameter."""
+        if self._check_artifacts_prepared(artifacts):
+            print("Skipping artifact preparation as it was already done.")
+            return
 
-        for name, target_path in self._artifacts.items():
+        for name, target_path in artifacts.items():
             try:
                 symlink(target_path, name, target_is_directory=path.isdir(target_path))
                 print(f"Prepared artifact: {name} -> {target_path}")
@@ -51,14 +51,7 @@ class NubisonMLFlowModel(PythonModel):
         Args:
             context (PythonModelContext): A collection of artifacts that a PythonModel can use when performing inference.
         """
-        # Check if symlinks are made and proceed if all symlinks are ok
-        self._artifacts = context.artifacts
-
-        if not self._check_artifacts_prepared():
-            print("Artifacts were not prepared. Skipping model loading.")
-            return
-
-        self._nubison_model.load_model()
+        self.prepare_artifacts(context.artifacts)
 
     def predict(self, context, model_input):
         input = model_input["input"]
@@ -66,6 +59,15 @@ class NubisonMLFlowModel(PythonModel):
 
     def get_nubison_model(self):
         return self._nubison_model
+
+    def load_model(self):
+        self._nubison_model.load_model()
+
+    def infer(self, *args, **kwargs) -> Any:
+        return self._nubison_model.infer(*args, **kwargs)
+
+    def get_nubison_model_infer_method(self):
+        return self._nubison_model.__class__.infer
 
 
 def _is_shareable(package: str) -> bool:
