@@ -19,48 +19,39 @@ from nubison_model.Model import (
 from nubison_model.utils import temporary_cwd
 
 
-def load_nubison_model(
-    mlflow_tracking_uri,
-    mlflow_model_uri,
-    prepare_artifacts: bool = False,
-):
+def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
+    if not mlflow_tracking_uri:
+        raise RuntimeError("MLflow tracking URI is not set")
+    if not mlflow_model_uri:
+        raise RuntimeError("MLflow model URI is not set")
 
     try:
-        if not mlflow_tracking_uri:
-            raise RuntimeError("MLflow tracking URI is not set")
-        if not mlflow_model_uri:
-            raise RuntimeError("MLflow model URI is not set")
         set_tracking_uri(mlflow_tracking_uri)
         mlflow_model = load_model(model_uri=mlflow_model_uri)
-
         nubison_mlflow_model = cast(
             NubisonMLFlowModel, mlflow_model.unwrap_python_model()
         )
-        if prepare_artifacts:
-            nubison_mlflow_model.prepare_artifacts()
-
-        # Get the NubisonModel instance from the MLflow model
-        nubison_model = nubison_mlflow_model.get_nubison_model()
     except Exception as e:
         raise RuntimeError(
             f"Error loading model(uri: {mlflow_model_uri}) from model registry(uri: {mlflow_tracking_uri})"
         ) from e
 
-    return nubison_model
+    return nubison_mlflow_model
 
 
 @contextmanager
 def test_client(model_uri):
-    app = build_inference_service(mlflow_model_uri=model_uri)
-    # Disable metrics for testing. Avoids Prometheus client duplicated registration error
-    app.config["metrics"] = {"enabled": False}
 
     # Create a temporary directory and set it as the current working directory to run tests
     # To avoid model initialization conflicts with the current directory
     test_dir = TemporaryDirectory()
-    with temporary_cwd(test_dir.name), TestClient(app.to_asgi()) as client:
+    with temporary_cwd(test_dir.name):
+        app = build_inference_service(mlflow_model_uri=model_uri)
+        # Disable metrics for testing. Avoids Prometheus client duplicated registration error
+        app.config["metrics"] = {"enabled": False}
 
-        yield client
+        with TestClient(app.to_asgi()) as client:
+            yield client
 
 
 def build_inference_service(
@@ -71,17 +62,14 @@ def build_inference_service(
     )
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
-    nubison_model_class = load_nubison_model(
+    nubison_mlflow_model = load_nubison_mlflow_model(
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_model_uri=mlflow_model_uri,
-        prepare_artifacts=True,
-    ).__class__
+    )
 
     @bentoml.service
     class BentoMLService:
         """BentoML Service for serving machine learning models."""
-
-        _nubison_model = None
 
         def __init__(self):
             """Initializes the BentoML Service for serving machine learning models.
@@ -92,14 +80,10 @@ def build_inference_service(
             Raises:
                 RuntimeError: Error loading model from the model registry
             """
-            self._nubison_model = load_nubison_model(
-                mlflow_tracking_uri=mlflow_tracking_uri,
-                mlflow_model_uri=mlflow_model_uri,
-                prepare_artifacts=False,
-            )
+            nubison_mlflow_model.load_model()
 
         @bentoml.api
-        @wraps(nubison_model_class.infer)
+        @wraps(nubison_mlflow_model.get_nubison_model_infer_method())
         def infer(self, *args, **kwargs):
             """Proxy method to the NubisonModel.infer method
 
@@ -109,11 +93,7 @@ def build_inference_service(
             Returns:
                 _type_: The return type of the NubisonModel.infer method
             """
-
-            if self._nubison_model is None:
-                raise RuntimeError("Model is not loaded")
-
-            return self._nubison_model.infer(*args, **kwargs)
+            return nubison_mlflow_model.infer(*args, **kwargs)
 
     return BentoMLService
 
