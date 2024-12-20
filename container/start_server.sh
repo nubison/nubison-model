@@ -19,23 +19,11 @@ ENV_NAME="nubison"
 echo "MLFLOW_TRACKING_URI: '$MLFLOW_TRACKING_URI'"
 echo "MLFLOW_MODEL_URI: '$MLFLOW_MODEL_URI'"
 
-echo "Downloading conda.yaml for run $run_uuid"
+echo "Downloading conda.yaml & requirements.txt for run $run_uuid"
 curl -L -o conda.yaml "${MLFLOW_TRACKING_URI}/get-artifact?path=conda.yaml&run_uuid=${run_uuid}"
+curl -L -o requirements.txt "${MLFLOW_TRACKING_URI}/get-artifact?path=requirements.txt&run_uuid=${run_uuid}"
 
-# Create the Conda environment
-echo "Creating Conda environment from conda.yaml"
-conda env create -f conda.yaml -n $ENV_NAME
+python_version=$(grep "python=" conda.yaml | awk -F= '{print $2}')
 
-echo "Activating Conda environment '$ENV_NAME'"
-# Initialize Conda for bash
-source ${CONDA_DIR}/etc/profile.d/conda.sh
-
-# Activate the environment
-conda activate "$ENV_NAME"
-
-# Verify that the environment is activated
-echo "Conda environment '$ENV_NAME' is activated"
-
-# Execute the BentoML serve command
 echo "Starting BentoML server..."
-exec bentoml serve nubison_model.Service:InferenceService --port ${PORT} ${DEBUG:+--debug}
+exec uv run --python $python_version --with-requirements requirements.txt bentoml serve nubison_model.Service:InferenceService --port ${PORT} ${DEBUG:+--debug}
