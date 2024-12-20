@@ -53,6 +53,8 @@ def test_client(model_uri):
         with TestClient(app.to_asgi()) as client:
             yield client
 
+    test_dir.cleanup()
+
 
 def build_inference_service(
     mlflow_tracking_uri: Optional[str] = None, mlflow_model_uri: Optional[str] = None
