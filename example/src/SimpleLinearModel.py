@@ -1,5 +1,5 @@
 # Modules under artifact folders can be imported using both relative or absolute paths.
-from .utils.logger import get_logger
+from src.utils.logger import get_logger  # type: ignore
 
 
 class SimpleLinearModel:
