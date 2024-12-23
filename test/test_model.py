@@ -1,7 +1,6 @@
 from os import path
 
 import pytest
-from mlflow.pyfunc import load_model
 from mlflow.tracking import MlflowClient
 
 from nubison_model import NubisonModel, register

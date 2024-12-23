@@ -3,7 +3,6 @@ from functools import wraps
 from os import environ, getenv
 from tempfile import TemporaryDirectory
 from typing import Optional, cast
-from unittest.mock import patch
 
 import bentoml
 from mlflow import set_tracking_uri

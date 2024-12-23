@@ -1,7 +1,8 @@
 from unittest.mock import patch
-from PIL.Image import Image, open as open_image
 
 import pytest
+from PIL.Image import Image
+from PIL.Image import open as open_image
 
 from nubison_model import NubisonMLFlowModel, build_inference_service, test_client
 
