@@ -3,7 +3,7 @@ from os import path
 import pytest
 from mlflow.tracking import MlflowClient
 
-from nubison_model import NubisonModel, register
+from nubison_model import NubisonModel, register, ModelContext
 from nubison_model.Model import _make_artifact_dir_dict, _package_list_from_file
 from test.utils import (
     get_run_id_from_model_uri,
@@ -21,7 +21,11 @@ def test_register_model(mlflow_server):
 
     # define a simple model (for example purposes, using a dummy model)
     class DummyModel(NubisonModel):
-        pass
+        def load_model(self, context: ModelContext):
+            pass
+            
+        def infer(self, input):
+            pass
 
     # configure the code directories
     artifact_dirs = ["src1", "src2"]
@@ -56,7 +60,7 @@ def test_throw_on_model_not_implementing_protocol(mlflow_server):
         pass
 
     class RightModel(NubisonModel):
-        def load_model(self):
+        def load_model(self, context: ModelContext):
             pass
 
         def infer(self, input):
@@ -102,7 +106,11 @@ def test_log_params_and_metrics(mlflow_server):
     model_name = "TestLoggedModel"
 
     class DummyModel(NubisonModel):
-        pass
+        def load_model(self, context: ModelContext):
+            pass
+            
+        def infer(self, input):
+            pass
 
     # Test parameters and metrics
     test_params = {"param1": "value1", "param2": "value2"}

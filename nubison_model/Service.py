@@ -17,6 +17,9 @@ from nubison_model.Model import (
 )
 from nubison_model.utils import temporary_cwd
 
+ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
+DEFAULT_NUM_WORKERS = 1
+
 
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     if not mlflow_tracking_uri:
@@ -63,12 +66,14 @@ def build_inference_service(
     )
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
+    num_workers = int(getenv(ENV_VAR_NUM_WORKERS) or DEFAULT_NUM_WORKERS)
+
     nubison_mlflow_model = load_nubison_mlflow_model(
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_model_uri=mlflow_model_uri,
     )
 
-    @bentoml.service
+    @bentoml.service(workers=num_workers)
     class BentoMLService:
         """BentoML Service for serving machine learning models."""
 
@@ -81,7 +86,20 @@ def build_inference_service(
             Raises:
                 RuntimeError: Error loading model from the model registry
             """
-            nubison_mlflow_model.load_model()
+
+            # Set default worker index to 1 in case of no bentoml server context is available
+            # For example, when running with test client
+            context = {
+                "worker_index": 0,
+                "num_workers": 1,
+            }
+            if bentoml.server_context.worker_index is not None:
+                context = {
+                    "worker_index": bentoml.server_context.worker_index - 1,
+                    "num_workers": num_workers,
+                }
+
+            nubison_mlflow_model.load_model(context)
 
         @bentoml.api
         @wraps(nubison_mlflow_model.get_nubison_model_infer_method())
