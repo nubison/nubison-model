@@ -18,7 +18,7 @@ from nubison_model.Model import (
 from nubison_model.utils import temporary_cwd
 
 ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
-DEFAULT_NUM_WORKERS = 4
+DEFAULT_NUM_WORKERS = 1
 
 
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):

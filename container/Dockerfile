@@ -26,7 +26,7 @@ ENV MLFLOW_TRACKING_URI=""
 ENV MLFLOW_MODEL_URI=""
 ENV DEBUG=""
 ENV PORT=3000
-ENV NUM_WORKERS=4
+ENV NUM_WORKERS=2
 
 # Expose the port specified by the PORT environment variable
 EXPOSE ${PORT}
