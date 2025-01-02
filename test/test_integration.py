@@ -1,5 +1,6 @@
 from nubison_model import (
     ENV_VAR_MLFLOW_MODEL_URI,
+    ModelContext,
     NubisonModel,
     Service,
     build_inference_service,
@@ -14,7 +15,7 @@ def test_register_and_serve_model(mlflow_server):
     """
 
     class DummyModel(NubisonModel):
-        def load_model(self):
+        def load_model(self, context: ModelContext):
             # Try to read the contents of the artifact file
             with open("./fixtures/bar.txt", "r") as f:
                 self.loaded = f.read()
@@ -44,7 +45,7 @@ def test_register_and_test_model(mlflow_server):
     """
 
     class DummyModel(NubisonModel):
-        def load_model(self):
+        def load_model(self, context: ModelContext):
             # Try to read the contents of the artifact file
             with open("./fixtures/bar.txt", "r") as f:
                 self.loaded = f.read()

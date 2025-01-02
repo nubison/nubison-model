@@ -1,7 +1,7 @@
 from importlib.metadata import distributions
 from os import getenv, path, symlink
 from sys import version_info as py_version_info
-from typing import Any, List, Optional, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, TypedDict, runtime_checkable
 
 import mlflow
 from mlflow.models.model import ModelInfo
@@ -14,11 +14,61 @@ DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
 
 
+class ModelContext(TypedDict):
+    """Context information passed to model during loading.
+
+    Attributes:
+        worker_index: Index of the worker process running the model. Used to identify
+            which worker is running the model in a parallel server setup. Starts from 0.
+            Even in a single server process setup, this will be 0. This is particularly
+            useful for GPU initialization as you can map specific workers to specific
+            GPU devices.
+        num_workers: Number of workers running the model.
+    """
+
+    worker_index: int
+
+    num_workers: int
+
+
 @runtime_checkable
 class NubisonModel(Protocol):
-    def load_model(self) -> None: ...
+    """Protocol defining the interface for user-defined models.
 
-    def infer(self, input: Any) -> Any: ...
+    Your model class must implement this protocol by providing:
+    1. load_model method - Called once at startup to initialize the model
+    2. infer method - Called for each inference request
+    """
+
+    def load_model(self, context: ModelContext) -> None:
+        """Initialize and load the model.
+
+        This method is called once when the model server starts up.
+        Use it to load model weights and initialize any resources needed for inference.
+
+        Args:
+            context: A dictionary containing worker information:
+                - worker_index: Index of the worker process (0-based)
+                - num_workers: Total number of workers running the model
+                This information is particularly useful for GPU initialization
+                in parallel setups, where you can map specific workers to
+                specific GPU devices.
+        """
+        ...
+
+    def infer(self, input: Any) -> Any:
+        """Perform inference on the input.
+
+        This method is called for each inference request.
+
+        Args:
+            input: The input data to perform inference on.
+                Can be of any type that your model accepts.
+
+        Returns:
+            The inference result. Can be of any type that your model produces.
+        """
+        ...
 
 
 class NubisonMLFlowModel(PythonModel):
@@ -60,8 +110,8 @@ class NubisonMLFlowModel(PythonModel):
     def get_nubison_model(self):
         return self._nubison_model
 
-    def load_model(self):
-        self._nubison_model.load_model()
+    def load_model(self, context: ModelContext):
+        self._nubison_model.load_model(context)
 
     def infer(self, *args, **kwargs) -> Any:
         return self._nubison_model.infer(*args, **kwargs)

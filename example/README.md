@@ -38,6 +38,10 @@ The `model.ipynb` file shows how to register a user model. It contains the follo
 
 - Use this method to prepare the model for inference which can be time-consuming.
 - This method is called once when the model inference server starts.
+- The `load_model` method receives a `ModelContext` dictionary containing:
+  - `worker_index`: Index of the worker process (0-based) for parallel processing
+  - `num_workers`: Total number of workers running the model
+- This information is particularly useful for GPU initialization in parallel setups, where you can map specific workers to specific GPU devices.
 - The path to the model weights file can be specified relative.
 
 #### #### `infer` method
