@@ -4,6 +4,7 @@ FROM python:3.12.8-slim-bookworm
 RUN apt-get update && apt-get install -y \
     bash \
     curl \
+    python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 
 # Use bash as the default shell
