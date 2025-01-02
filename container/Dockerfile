@@ -13,7 +13,11 @@ SHELL ["bash", "-c"]
 # Set the working directory
 WORKDIR /app
 
-# Copy the entrypoint script into the container
+# Add label descriptions
+LABEL org.opencontainers.image.title="nubison-model" \
+      org.opencontainers.image.description="A container image for nubison-model."\
+      org.opencontainers.image.source="https://github.com/nubison/nubison-model"
+
 COPY start_server.sh /app/start_server.sh
 RUN chmod +x /app/start_server.sh
 
@@ -22,6 +26,7 @@ ENV MLFLOW_TRACKING_URI=""
 ENV MLFLOW_MODEL_URI=""
 ENV DEBUG=""
 ENV PORT=3000
+ENV NUM_WORKERS=4
 
 # Expose the port specified by the PORT environment variable
 EXPOSE ${PORT}
