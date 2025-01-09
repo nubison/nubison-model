@@ -18,6 +18,7 @@ ENV_NAME="nubison"
 
 echo "MLFLOW_TRACKING_URI: '$MLFLOW_TRACKING_URI'"
 echo "MLFLOW_MODEL_URI: '$MLFLOW_MODEL_URI'"
+echo "NUM_WORKERS: '$NUM_WORKERS'"
 
 echo "Downloading conda.yaml & requirements.txt for run $run_uuid"
 curl -L -o conda.yaml "${MLFLOW_TRACKING_URI}/get-artifact?path=conda.yaml&run_uuid=${run_uuid}"
