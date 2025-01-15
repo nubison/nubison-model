@@ -3,7 +3,7 @@ from os import path
 import pytest
 from mlflow.tracking import MlflowClient
 
-from nubison_model import NubisonModel, register, ModelContext
+from nubison_model import ModelContext, NubisonModel, register
 from nubison_model.Model import _make_artifact_dir_dict, _package_list_from_file
 from test.utils import (
     get_run_id_from_model_uri,
@@ -23,7 +23,7 @@ def test_register_model(mlflow_server):
     class DummyModel(NubisonModel):
         def load_model(self, context: ModelContext):
             pass
-            
+
         def infer(self, input):
             pass
 
@@ -108,7 +108,7 @@ def test_log_params_and_metrics(mlflow_server):
     class DummyModel(NubisonModel):
         def load_model(self, context: ModelContext):
             pass
-            
+
         def infer(self, input):
             pass
 
@@ -136,3 +136,32 @@ def test_log_params_and_metrics(mlflow_server):
     assert set(test_metrics.items()) <= set(
         run.data.metrics.items()
     ), "Not all metrics were logged correctly"
+
+
+def test_register_with_tags(mlflow_server):
+    """Test registering a model with tags using actual MLflow server."""
+
+    model_name = "TestTaggedModel"
+
+    class DummyModel(NubisonModel):
+        def load_model(self, context: ModelContext):
+            pass
+
+        def infer(self, input):
+            pass
+
+    # Test tags
+    test_tags = {"version": "1.0.0", "environment": "test", "author": "test_user"}
+
+    # Register model with tags
+    register(DummyModel(), model_name=model_name, tags=test_tags)
+
+    # Get the registered model information from MLflow
+    client = MlflowClient()
+    registered_model = client.get_registered_model(model_name)
+
+    # Verify each tag was set correctly
+    for tag_name, tag_value in test_tags.items():
+        assert (
+            registered_model.tags[tag_name] == tag_value
+        ), f"Tag {tag_name} was not set correctly"
