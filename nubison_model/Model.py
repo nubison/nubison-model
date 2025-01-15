@@ -200,7 +200,25 @@ def register(
     artifact_dirs: Optional[str] = None,
     params: Optional[dict[str, Any]] = None,
     metrics: Optional[dict[str, float]] = None,
+    tags: Optional[dict[str, str]] = None,
 ):
+    """Register a model with MLflow.
+
+    Args:
+        model: The model to register, must implement NubisonModel protocol
+        model_name: Name to register the model under. Defaults to env var MODEL_NAME or 'Default'
+        mlflow_uri: MLflow tracking URI. Defaults to env var MLFLOW_TRACKING_URI or local URI
+        artifact_dirs: Comma-separated list of directories to include as artifacts
+        params: Optional dictionary of parameters to log
+        metrics: Optional dictionary of metrics to log
+        tags: Optional dictionary of tags to log with the model registration
+
+    Returns:
+        str: The URI of the registered model
+
+    Raises:
+        TypeError: If the model doesn't implement the NubisonModel protocol
+    """
     # Check if the model implements the Model protocol
     if not isinstance(model, NubisonModel):
         raise TypeError("The model must implement the Model protocol")
@@ -231,5 +249,11 @@ def register(
             artifacts=_make_artifact_dir_dict(artifact_dirs),
             artifact_path="",
         )
+
+        # Set tags on the registered model instead of the run
+        if tags:
+            client = mlflow.tracking.MlflowClient()
+            for tag_name, tag_value in tags.items():
+                client.set_registered_model_tag(model_name, tag_name, tag_value)
 
         return model_info.model_uri
