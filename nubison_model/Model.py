@@ -240,6 +240,8 @@ def register(
             mlflow.log_params(params)
         if metrics:
             mlflow.log_metrics(metrics)
+        if tags:
+            mlflow.set_tags(tags)
 
         # Log the model to MLflow
         model_info: ModelInfo = mlflow.pyfunc.log_model(
@@ -254,6 +256,11 @@ def register(
         if tags:
             client = mlflow.tracking.MlflowClient()
             for tag_name, tag_value in tags.items():
-                client.set_registered_model_tag(model_name, tag_name, tag_value)
+                client.set_model_version_tag(
+                    model_name,
+                    str(model_info.registered_model_version),
+                    tag_name,
+                    tag_value,
+                )
 
         return model_info.model_uri

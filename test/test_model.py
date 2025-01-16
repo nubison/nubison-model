@@ -154,14 +154,14 @@ def test_register_with_tags(mlflow_server):
     test_tags = {"version": "1.0.0", "environment": "test", "author": "test_user"}
 
     # Register model with tags
-    register(DummyModel(), model_name=model_name, tags=test_tags)
+    model_uri = register(DummyModel(), model_name=model_name, tags=test_tags)
 
     # Get the registered model information from MLflow
     client = MlflowClient()
-    registered_model = client.get_registered_model(model_name)
+    model_version = client.get_latest_versions(model_name)[0]
 
     # Verify each tag was set correctly
     for tag_name, tag_value in test_tags.items():
         assert (
-            registered_model.tags[tag_name] == tag_value
+            model_version.tags[tag_name] == tag_value
         ), f"Tag {tag_name} was not set correctly"
