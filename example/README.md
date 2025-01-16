@@ -52,9 +52,16 @@ The `model.ipynb` file shows how to register a user model. It contains the follo
 
 ### ### Register a user model
 
-- The `register` function is used to register the user model.
-- The `artifact_dirs` argument specifies the folders containing the files used by the model class.
-- If the model class does not use any files, this argument can be omitted.
+The `register` function is used to register the user model with MLflow. It supports the following parameters:
+
+- `model`: The model to register (required). Must implement the NubisonModel protocol.
+- `model_name`: Name to register the model under. Defaults to env var MODEL_NAME or 'Default'.
+- `mlflow_uri`: MLflow tracking URI. Defaults to env var MLFLOW_TRACKING_URI or local URI.
+- `artifact_dirs`: Specifies the folders containing the files used by the model class.
+  If the model class does not use any files, this argument can be omitted.
+- `params`: Optional dictionary of parameters to log with the MLflow run.
+- `metrics`: Optional dictionary of metrics to log with the MLflow run.
+- `tags`: Optional dictionary of tags to log with the model version.
 
 ### ### Test a user model
 
