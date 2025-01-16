@@ -154,7 +154,7 @@ def test_register_with_tags(mlflow_server):
     test_tags = {"version": "1.0.0", "environment": "test", "author": "test_user"}
 
     # Register model with tags
-    model_uri = register(DummyModel(), model_name=model_name, tags=test_tags)
+    register(DummyModel(), model_name=model_name, tags=test_tags)
 
     # Get the registered model information from MLflow
     client = MlflowClient()
