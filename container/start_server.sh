@@ -20,17 +20,14 @@ echo "MLFLOW_TRACKING_URI: '$MLFLOW_TRACKING_URI'"
 echo "MLFLOW_MODEL_URI: '$MLFLOW_MODEL_URI'"
 echo "NUM_WORKERS: '$NUM_WORKERS'"
 
-response_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 -f "${MLFLOW_TRACKING_URI}" || echo "000")
-if [ "$response_code" -ne 200 ]; then
-  echo "Failed to connect to the MLflow server"
-  exit 1
-else
-  echo "Server is up"
-fi
-
 echo "Downloading conda.yaml & requirements.txt for run $run_uuid"
-curl -L -o conda.yaml "${MLFLOW_TRACKING_URI}/get-artifact?path=conda.yaml&run_uuid=${run_uuid}"
-curl -L -o requirements.txt "${MLFLOW_TRACKING_URI}/get-artifact?path=requirements.txt&run_uuid=${run_uuid}"
+ret_conda=$(curl -L -o conda.yaml -f "${MLFLOW_TRACKING_URI}/get-artifact?path=conda.yaml&run_uuid=${run_uuid}")
+ret_req=$(curl -L -o requirements.txt -f "${MLFLOW_TRACKING_URI}/get-artifact?path=requirements.txt&run_uuid=${run_uuid}")
+
+if [ "$ret_conda" -ne 200 ] || [ "$ret_req" -ne 200 ]; then
+  echo "Failed to download conda.yaml or requirements.txt"
+  exit 1
+fi
 
 python_version=$(grep "python=" conda.yaml | awk -F= '{print $2}')
 
