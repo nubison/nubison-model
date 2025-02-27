@@ -20,10 +20,12 @@ echo "MLFLOW_TRACKING_URI: '$MLFLOW_TRACKING_URI'"
 echo "MLFLOW_MODEL_URI: '$MLFLOW_MODEL_URI'"
 echo "NUM_WORKERS: '$NUM_WORKERS'"
 
-response_code=$(curl -s -o /dev/null -w "%{http_code}" -L "${MLFLOW_TRACKING_URI}/get-artifact?path=conda.yaml&run_uuid=${run_uuid}")
-echo "HTTP Status Code: $response_code"
+response_code=$(curl -s -o /dev/null -w "%{http_code}" "${MLFLOW_TRACKING_URI}" || echo "000")
 if [ "$response_code" -ne 200 ]; then
+  echo "Failed to connect to the MLflow server"
   exit 1
+else
+  echo "Server is up"
 fi
 
 echo "Downloading conda.yaml & requirements.txt for run $run_uuid"
