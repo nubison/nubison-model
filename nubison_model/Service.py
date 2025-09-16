@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from functools import wraps
-from os import environ, getenv
+from os import environ, getenv, makedirs
 from tempfile import TemporaryDirectory
 from typing import Optional, cast
 
@@ -22,10 +22,6 @@ DEFAULT_NUM_WORKERS = 1
 
 
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
-    if not mlflow_tracking_uri:
-        raise RuntimeError("MLflow tracking URI is not set")
-    if not mlflow_model_uri:
-        raise RuntimeError("MLflow model URI is not set")
 
     try:
         set_tracking_uri(mlflow_tracking_uri)
@@ -67,10 +63,33 @@ def build_inference_service(
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
     num_workers = int(getenv(ENV_VAR_NUM_WORKERS) or DEFAULT_NUM_WORKERS)
+    shared_artifacts_path = "/tmp/mlflow_artifacts"
+
+    def download_mlflow_artifacts():
+        """Download MLflow artifacts to shared directory before service creation."""
+        from mlflow.artifacts import download_artifacts
+
+        if not mlflow_tracking_uri:
+            raise RuntimeError("MLflow tracking URI is not set")
+        if not mlflow_model_uri:
+            raise RuntimeError("MLflow model URI is not set")
+
+        try:
+            set_tracking_uri(mlflow_tracking_uri)
+            makedirs(shared_artifacts_path, exist_ok=True)
+
+            download_artifacts(
+                artifact_uri=mlflow_model_uri, dst_path=shared_artifacts_path
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Error downloading artifacts(uri: {mlflow_model_uri}) from model registry(uri: {mlflow_tracking_uri})"
+            ) from e
+
+    download_mlflow_artifacts()
 
     nubison_mlflow_model = load_nubison_mlflow_model(
-        mlflow_tracking_uri=mlflow_tracking_uri,
-        mlflow_model_uri=mlflow_model_uri,
+        mlflow_tracking_uri=mlflow_tracking_uri, mlflow_model_uri=shared_artifacts_path
     )
 
     @bentoml.service(workers=num_workers)
