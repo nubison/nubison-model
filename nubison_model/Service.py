@@ -1,8 +1,11 @@
 from contextlib import contextmanager
 from functools import wraps
-from os import environ, getenv, makedirs
+from os import environ, getenv
+import os
 from tempfile import TemporaryDirectory
 from typing import Optional, cast
+import tempfile
+import time
 
 import bentoml
 from mlflow import set_tracking_uri
@@ -21,20 +24,78 @@ ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
 DEFAULT_NUM_WORKERS = 1
 
 
-def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
+def get_shared_artifacts_dir():
+    """Get the shared artifacts directory path (OS-compatible)."""
+    return os.path.join(tempfile.gettempdir(), "nubison_shared_artifacts")
 
+
+def _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri):
+    """Load MLflow model and wrap with NubisonMLFlowModel."""
+    set_tracking_uri(mlflow_tracking_uri)
+    mlflow_model = load_model(model_uri=model_uri)
+    return cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
+
+
+def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
+    if not mlflow_tracking_uri or not mlflow_model_uri:
+        raise RuntimeError("MLflow tracking URI and model URI must be set")
+
+    shared_info_dir = get_shared_artifacts_dir()
+    lock_file = shared_info_dir + ".lock"
+    path_file = shared_info_dir + ".path"
+
+    # Use cached path if available
+    if os.path.exists(path_file):
+        with open(path_file, "r") as f:
+            cached_path = f.read().strip()
+        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, cached_path)
+
+    # Try to acquire download lock
     try:
+        os.makedirs(lock_file, exist_ok=False)
+
+        # Load model once and extract path
         set_tracking_uri(mlflow_tracking_uri)
         mlflow_model = load_model(model_uri=mlflow_model_uri)
-        nubison_mlflow_model = cast(
-            NubisonMLFlowModel, mlflow_model.unwrap_python_model()
-        )
-    except Exception as e:
-        raise RuntimeError(
-            f"Error loading model(uri: {mlflow_model_uri}) from model registry(uri: {mlflow_tracking_uri})"
-        ) from e
+        nubison_model = cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
 
-    return nubison_mlflow_model
+        # Extract and save model path for other workers
+        try:
+            context = mlflow_model._model_impl.context
+            for path in context.artifacts.values():
+                if path and os.path.exists(str(path)):
+                    model_root = os.path.dirname(os.path.dirname(str(path)))
+                    if os.path.exists(os.path.join(model_root, "MLmodel")):
+                        with open(path_file, "w") as f:
+                            f.write(model_root)
+                        break
+        except (AttributeError, TypeError):
+            pass
+
+        return nubison_model
+
+    except FileExistsError:
+        # Another worker is downloading, wait for completion
+        while not os.path.exists(path_file):
+            if not os.path.exists(lock_file):
+                # Lock released - first worker completed or failed, try again
+                break
+            time.sleep(0.5)
+
+        # Use cached path if available, otherwise fallback to original URI
+        model_uri = mlflow_model_uri
+        if os.path.exists(path_file):
+            with open(path_file, "r") as f:
+                model_uri = f.read().strip()
+
+        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri)
+
+    finally:
+        # Always remove lock
+        try:
+            os.rmdir(lock_file)
+        except OSError:
+            pass
 
 
 @contextmanager
@@ -63,33 +124,10 @@ def build_inference_service(
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
     num_workers = int(getenv(ENV_VAR_NUM_WORKERS) or DEFAULT_NUM_WORKERS)
-    shared_artifacts_path = "/tmp/mlflow_artifacts"
-
-    def download_mlflow_artifacts():
-        """Download MLflow artifacts to shared directory before service creation."""
-        from mlflow.artifacts import download_artifacts
-
-        if not mlflow_tracking_uri:
-            raise RuntimeError("MLflow tracking URI is not set")
-        if not mlflow_model_uri:
-            raise RuntimeError("MLflow model URI is not set")
-
-        try:
-            set_tracking_uri(mlflow_tracking_uri)
-            makedirs(shared_artifacts_path, exist_ok=True)
-
-            download_artifacts(
-                artifact_uri=mlflow_model_uri, dst_path=shared_artifacts_path
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"Error downloading artifacts(uri: {mlflow_model_uri}) from model registry(uri: {mlflow_tracking_uri})"
-            ) from e
-
-    download_mlflow_artifacts()
 
     nubison_mlflow_model = load_nubison_mlflow_model(
-        mlflow_tracking_uri=mlflow_tracking_uri, mlflow_model_uri=shared_artifacts_path
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        mlflow_model_uri=mlflow_model_uri,
     )
 
     @bentoml.service(workers=num_workers)
