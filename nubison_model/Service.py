@@ -25,7 +25,7 @@ ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
 DEFAULT_NUM_WORKERS = 1
 
 
-def get_shared_artifacts_dir():
+def _get_shared_artifacts_dir():
     """Get the shared artifacts directory path (OS-compatible)."""
     return os.path.join(tempfile.gettempdir(), "nubison_shared_artifacts")
 
@@ -80,7 +80,7 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     if not mlflow_tracking_uri or not mlflow_model_uri:
         raise RuntimeError("MLflow tracking URI and model URI must be set")
 
-    shared_info_dir = get_shared_artifacts_dir()
+    shared_info_dir = _get_shared_artifacts_dir()
     lock_file = shared_info_dir + ".lock"
     path_file = shared_info_dir + ".path"
 
