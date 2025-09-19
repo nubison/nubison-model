@@ -31,10 +31,15 @@ def get_shared_artifacts_dir():
 
 
 def _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri):
-    """Load MLflow model and wrap with NubisonMLFlowModel."""
+    """Load MLflow model and wrap with NubisonMLFlowModel.
+
+    Returns:
+        tuple: (mlflow_model, nubison_model)
+    """
     set_tracking_uri(mlflow_tracking_uri)
     mlflow_model = load_model(model_uri=model_uri)
-    return cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
+    nubison_model = cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
+    return mlflow_model, nubison_model
 
 
 def _load_cached_model_if_available(mlflow_tracking_uri, path_file):
@@ -44,7 +49,10 @@ def _load_cached_model_if_available(mlflow_tracking_uri, path_file):
 
     with open(path_file, "r") as f:
         cached_path = f.read().strip()
-    return _load_model_with_nubison_wrapper(mlflow_tracking_uri, cached_path)
+    _, nubison_model = _load_model_with_nubison_wrapper(
+        mlflow_tracking_uri, cached_path
+    )
+    return nubison_model
 
 
 def _extract_and_cache_model_path(mlflow_model, path_file):
@@ -94,9 +102,9 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
                 return cached_model
 
             # Load model and extract path for caching
-            set_tracking_uri(mlflow_tracking_uri)
-            mlflow_model = load_model(model_uri=mlflow_model_uri)
-            nubison_model = cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
+            mlflow_model, nubison_model = _load_model_with_nubison_wrapper(
+                mlflow_tracking_uri, mlflow_model_uri
+            )
 
             # Cache model path for other workers
             _extract_and_cache_model_path(mlflow_model, path_file)
@@ -105,7 +113,10 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
 
     except Timeout:
         # Fallback to original URI if lock timeout occurs
-        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, mlflow_model_uri)
+        _, nubison_model = _load_model_with_nubison_wrapper(
+            mlflow_tracking_uri, mlflow_model_uri
+        )
+        return nubison_model
 
 
 @contextmanager
