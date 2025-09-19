@@ -77,6 +77,28 @@ def _extract_and_cache_model_path(mlflow_model, path_file):
 
 
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
+    """Load a Nubison MLflow model with robust caching and multi-worker support.
+
+    This function implements a sophisticated model loading strategy that uses FileLock
+    for inter-process synchronization, ensuring only one worker downloads the model
+    while others wait and reuse the cached result. Includes automatic timeout handling
+    and fallback mechanisms for production reliability.
+
+    Args:
+        mlflow_tracking_uri (str): MLflow tracking server URI for model registry access
+        mlflow_model_uri (str): Model URI in MLflow format (e.g., 'models:/model_name/version')
+
+    Returns:
+        NubisonMLFlowModel: Loaded and wrapped model ready for inference
+
+    Raises:
+        RuntimeError: If required URIs are not provided
+        Timeout: If lock acquisition times out (handled with fallback)
+
+    Note:
+        Uses 5-minute timeout and double-check pattern to prevent race conditions.
+        Automatically extracts and caches local model paths for faster subsequent loads.
+    """
     if not mlflow_tracking_uri or not mlflow_model_uri:
         raise RuntimeError("MLflow tracking URI and model URI must be set")
 
