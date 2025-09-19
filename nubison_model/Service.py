@@ -8,6 +8,7 @@ import tempfile
 import time
 
 import bentoml
+from filelock import FileLock, Timeout
 from mlflow import set_tracking_uri
 from mlflow.pyfunc import load_model
 from starlette.testclient import TestClient
@@ -36,6 +37,37 @@ def _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri):
     return cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
 
 
+def _load_cached_model_if_available(mlflow_tracking_uri, path_file):
+    """Load model from cached path if available."""
+    if not os.path.exists(path_file):
+        return None
+
+    with open(path_file, "r") as f:
+        cached_path = f.read().strip()
+    return _load_model_with_nubison_wrapper(mlflow_tracking_uri, cached_path)
+
+
+def _extract_and_cache_model_path(mlflow_model, path_file):
+    """Extract model root path from artifacts and cache it."""
+    try:
+        context = mlflow_model._model_impl.context
+        valid_paths = (
+            str(path)
+            for path in context.artifacts.values()
+            if path and os.path.exists(str(path))
+        )
+
+        for artifact_path in valid_paths:
+            model_root = os.path.dirname(os.path.dirname(artifact_path))
+            if os.path.exists(os.path.join(model_root, "MLmodel")):
+                with open(path_file, "w") as f:
+                    f.write(model_root)
+                break
+
+    except (AttributeError, TypeError):
+        pass
+
+
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     if not mlflow_tracking_uri or not mlflow_model_uri:
         raise RuntimeError("MLflow tracking URI and model URI must be set")
@@ -44,58 +76,36 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     lock_file = shared_info_dir + ".lock"
     path_file = shared_info_dir + ".path"
 
-    # Use cached path if available
-    if os.path.exists(path_file):
-        with open(path_file, "r") as f:
-            cached_path = f.read().strip()
-        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, cached_path)
+    # Try loading from cache first
+    cached_model = _load_cached_model_if_available(mlflow_tracking_uri, path_file)
+    if cached_model:
+        return cached_model
 
-    # Try to acquire download lock
+    # Use FileLock for robust locking with timeout
+    file_lock = FileLock(lock_file, timeout=300)
+
     try:
-        os.makedirs(lock_file, exist_ok=False)
+        with file_lock:
+            # Double-check pattern: verify cache doesn't exist after acquiring lock
+            cached_model = _load_cached_model_if_available(
+                mlflow_tracking_uri, path_file
+            )
+            if cached_model:
+                return cached_model
 
-        # Load model once and extract path
-        set_tracking_uri(mlflow_tracking_uri)
-        mlflow_model = load_model(model_uri=mlflow_model_uri)
-        nubison_model = cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
+            # Load model and extract path for caching
+            set_tracking_uri(mlflow_tracking_uri)
+            mlflow_model = load_model(model_uri=mlflow_model_uri)
+            nubison_model = cast(NubisonMLFlowModel, mlflow_model.unwrap_python_model())
 
-        # Extract and save model path for other workers
-        try:
-            context = mlflow_model._model_impl.context
-            for path in context.artifacts.values():
-                if path and os.path.exists(str(path)):
-                    model_root = os.path.dirname(os.path.dirname(str(path)))
-                    if os.path.exists(os.path.join(model_root, "MLmodel")):
-                        with open(path_file, "w") as f:
-                            f.write(model_root)
-                        break
-        except (AttributeError, TypeError):
-            pass
+            # Cache model path for other workers
+            _extract_and_cache_model_path(mlflow_model, path_file)
 
-        return nubison_model
+            return nubison_model
 
-    except FileExistsError:
-        # Another worker is downloading, wait for completion
-        while not os.path.exists(path_file):
-            if not os.path.exists(lock_file):
-                # Lock released - first worker completed or failed, try again
-                break
-            time.sleep(0.5)
-
-        # Use cached path if available, otherwise fallback to original URI
-        model_uri = mlflow_model_uri
-        if os.path.exists(path_file):
-            with open(path_file, "r") as f:
-                model_uri = f.read().strip()
-
-        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri)
-
-    finally:
-        # Always remove lock
-        try:
-            os.rmdir(lock_file)
-        except OSError:
-            pass
+    except Timeout:
+        # Fallback to original URI if lock timeout occurs
+        return _load_model_with_nubison_wrapper(mlflow_tracking_uri, mlflow_model_uri)
 
 
 @contextmanager
