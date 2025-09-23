@@ -26,15 +26,24 @@ pillow = "^11.0.0"
 
 [tool.poetry-dynamic-versioning]
 enable = true
+pattern = "^(?P<prefix>test-)?v(?P<base>.+)$"
 format-jinja = """
-    {%- if distance == 0 and not dirty -%}
-        {{ serialize_pep440(base, stage, revision) }}
-    {%- elif revision is not none and not dirty -%}
-        {{ serialize_pep440(base, stage, revision + 1, dev=distance, metadata=[commit]) }}
-    {%- elif not dirty -%}
-        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit]) }}
+    {%- if prefix -%}
+        {# TestPyPI version: test-v0.0.1 → 0.0.1.dev0+test #}
+        {%- if distance == 0 and not dirty -%}
+            {{ base }}.dev0+test
+        {%- else -%}
+            {{ base }}.dev{{ distance }}+test.{{ commit }}
+        {%- endif -%}
     {%- else -%}
-        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit, timestamp]) }}
+        {# PyPI version: v0.0.1 → 0.0.1 #}
+        {%- if distance == 0 and not dirty -%}
+            {{ base }}
+        {%- elif distance > 0 -%}
+            {{ base }}.dev{{ distance }}+{{ commit }}
+        {%- else -%}
+            {{ base }}
+        {%- endif -%}
     {%- endif -%}
 """
 
