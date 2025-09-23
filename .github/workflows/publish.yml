@@ -42,7 +42,7 @@ jobs:
     name: Publish to TestPyPI
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/test-')
     environment:
       name: testpypi
       url: https://test.pypi.org/p/nubison-model

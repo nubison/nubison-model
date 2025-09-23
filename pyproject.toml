@@ -29,21 +29,11 @@ enable = true
 pattern = "^(?P<prefix>test-)?v(?P<base>.+)$"
 format-jinja = """
     {%- if prefix -%}
-        {# TestPyPI version: test-v0.0.1 → 0.0.1.dev0+test #}
-        {%- if distance == 0 and not dirty -%}
-            {{ base }}.dev0+test
-        {%- else -%}
-            {{ base }}.dev{{ distance }}+test.{{ commit }}
-        {%- endif -%}
+        {# TestPyPI version: test-v0.0.1 → 0.0.1a1 #}
+        {{ base }}a1
     {%- else -%}
         {# PyPI version: v0.0.1 → 0.0.1 #}
-        {%- if distance == 0 and not dirty -%}
-            {{ base }}
-        {%- elif distance > 0 -%}
-            {{ base }}.dev{{ distance }}+{{ commit }}
-        {%- else -%}
-            {{ base }}
-        {%- endif -%}
+        {{ base }}
     {%- endif -%}
 """
 
