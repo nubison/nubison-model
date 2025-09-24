@@ -26,16 +26,8 @@ pillow = "^11.0.0"
 
 [tool.poetry-dynamic-versioning]
 enable = true
-pattern = "^(?P<prefix>test-)?v(?P<base>.+)$"
-format-jinja = """
-    {%- if prefix -%}
-        {# TestPyPI version: test-v0.0.1 → 0.0.1a1 #}
-        {{ base }}a1
-    {%- else -%}
-        {# PyPI version: v0.0.1 → 0.0.1 #}
-        {{ base }}
-    {%- endif -%}
-"""
+vcs = "git"
+style = "pep440"
 
 [tool.isort]
 profile = "black"  # or your preferred profile
