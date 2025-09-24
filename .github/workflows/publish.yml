@@ -29,6 +29,9 @@ jobs:
         python-version: '3.11'
         cache: 'poetry'
 
+    - name: Install poetry-dynamic-versioning
+      run: pip install poetry-dynamic-versioning
+
     - name: Debug versioning info
       run: |
         echo "=== Git Information ==="
@@ -36,7 +39,7 @@ jobs:
         git tag --list | head -10
         echo "=== Poetry Dynamic Versioning Debug ==="
         poetry version
-        poetry run python -c "import poetry_dynamic_versioning; print('PDV version:', poetry_dynamic_versioning.__version__)"
+        python -c "import poetry_dynamic_versioning; print('PDV version:', poetry_dynamic_versioning.__version__)"
         echo "=== Environment ==="
         pwd
         ls -la
