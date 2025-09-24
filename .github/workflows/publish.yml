@@ -29,8 +29,8 @@ jobs:
         python-version: '3.11'
         cache: 'poetry'
 
-    - name: Install poetry-dynamic-versioning
-      run: pip install poetry-dynamic-versioning
+    - name: Install poetry-dynamic-versioning plugin
+      run: poetry self add "poetry-dynamic-versioning[plugin]"
 
     - name: Debug versioning info
       run: |
