@@ -1,7 +1,7 @@
 # This file is used to specify the dependencies of your model.
 # The packages listed here will be installed in the environment where the model is deployed.
 
-nubison-model==0.0.6 # nubison-model is required to register the user model.
+nubison-model==0.0.7 # nubison-model is required to register the user model.
 
 # Put other required packages here.
 #numpy==2.1.3
