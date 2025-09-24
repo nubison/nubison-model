@@ -32,18 +32,6 @@ jobs:
     - name: Install poetry-dynamic-versioning plugin
       run: poetry self add "poetry-dynamic-versioning[plugin]"
 
-    - name: Debug versioning info
-      run: |
-        echo "=== Git Information ==="
-        git describe --tags --always
-        git tag --list | head -10
-        echo "=== Poetry Dynamic Versioning Debug ==="
-        poetry version
-        python -c "import poetry_dynamic_versioning; print('PDV version:', poetry_dynamic_versioning.__version__)"
-        echo "=== Environment ==="
-        pwd
-        ls -la
-
     - name: Build package
       run: poetry build
 
