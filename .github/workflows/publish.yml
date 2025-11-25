@@ -67,7 +67,13 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    if: "!github.event.release.prerelease"
+    # Safety check: block pre-release tags even if prerelease checkbox is unchecked
+    if: |
+      !github.event.release.prerelease &&
+      !contains(github.ref, 'alpha') &&
+      !contains(github.ref, 'beta') &&
+      !contains(github.ref, 'rc') &&
+      !contains(github.ref, 'dev')
     environment:
       name: pypi
       url: https://pypi.org/p/nubison-model
