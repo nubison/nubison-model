@@ -1,0 +1,90 @@
+name: Build and Publish Package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Distribution
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Poetry
+      run: |
+        export POETRY_HOME=/opt/poetry
+        python3 -m venv $POETRY_HOME
+        $POETRY_HOME/bin/pip install poetry==2.0.0
+        echo "$POETRY_HOME/bin" >> $GITHUB_PATH
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'poetry'
+
+    - name: Install poetry-dynamic-versioning plugin
+      run: poetry self add "poetry-dynamic-versioning[plugin]"
+
+    - name: Build package
+      run: poetry build
+
+    - name: Upload distribution artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+  publish-to-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event.release.prerelease
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/nubison-model
+    permissions:
+      id-token: write
+    steps:
+    - name: Download distribution artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Safety check: block pre-release tags even if prerelease checkbox is unchecked
+    if: |
+      !github.event.release.prerelease &&
+      !contains(github.ref, 'alpha') &&
+      !contains(github.ref, 'beta') &&
+      !contains(github.ref, 'rc') &&
+      !contains(github.ref, 'dev')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nubison-model
+    permissions:
+      id-token: write
+    steps:
+    - name: Download distribution artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1

@@ -26,6 +26,8 @@ pillow = "^11.0.0"
 
 [tool.poetry-dynamic-versioning]
 enable = true
+vcs = "git"
+style = "pep440"
 format-jinja = """
     {%- if distance == 0 and not dirty -%}
         {{ serialize_pep440(base, stage, revision) }}
