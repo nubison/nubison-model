@@ -24,6 +24,9 @@ from nubison_model.utils import temporary_cwd
 ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
 DEFAULT_NUM_WORKERS = 1
 
+ENV_VAR_REQUEST_TIMEOUT = "REQUEST_TIMEOUT"
+DEFAULT_REQUEST_TIMEOUT = 60
+
 
 def _get_shared_artifacts_dir():
     """Get the shared artifacts directory path (OS-compatible)."""
@@ -167,13 +170,14 @@ def build_inference_service(
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
     num_workers = int(getenv(ENV_VAR_NUM_WORKERS) or DEFAULT_NUM_WORKERS)
+    request_timeout = int(getenv(ENV_VAR_REQUEST_TIMEOUT) or DEFAULT_REQUEST_TIMEOUT)
 
     nubison_mlflow_model = load_nubison_mlflow_model(
         mlflow_tracking_uri=mlflow_tracking_uri,
         mlflow_model_uri=mlflow_model_uri,
     )
 
-    @bentoml.service(workers=num_workers)
+    @bentoml.service(workers=num_workers, traffic={"timeout": request_timeout})
     class BentoMLService:
         """BentoML Service for serving machine learning models."""
 
