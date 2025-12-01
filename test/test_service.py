@@ -503,5 +503,73 @@ def test_load_model_dvc_version_cache():
     assert key1 != key2
 
 
+def test_request_timeout_default_allows_slow_request():
+    """Test that default REQUEST_TIMEOUT (60s) allows slow requests to complete."""
+    import time
+
+    class SlowModel:
+        def infer(self):
+            time.sleep(2)  # 2 second delay, well within default 60s timeout
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(SlowModel())
+
+        # Ensure REQUEST_TIMEOUT is not set (use default 60s)
+        env_without_timeout = {k: v for k, v in os.environ.items() if k != "REQUEST_TIMEOUT"}
+        with patch.dict(os.environ, env_without_timeout, clear=True):
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should succeed with default 60s timeout
+                assert response.status_code == 200
+                assert response.text == "done"
+
+
+def test_request_timeout_causes_504():
+    """Test that REQUEST_TIMEOUT causes 504 when request exceeds timeout."""
+    import time
+
+    class SlowModel:
+        def infer(self):
+            time.sleep(2)  # 2 second delay, exceeds 1s timeout
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(SlowModel())
+
+        with temporary_env({"REQUEST_TIMEOUT": "1"}):  # 1 second timeout
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should return 504 Gateway Timeout
+                assert response.status_code == 504
+
+
+def test_request_timeout_success_when_fast():
+    """Test that fast responses succeed within REQUEST_TIMEOUT."""
+
+    class FastModel:
+        def infer(self):
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(FastModel())
+
+        with temporary_env({"REQUEST_TIMEOUT": "10"}):  # 10 second timeout
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should return 200 OK
+                assert response.status_code == 200
+                assert response.text == "done"
+
+
 # Ignore the test_client from being collected by pytest
 setattr(test_client, "__test__", False)
