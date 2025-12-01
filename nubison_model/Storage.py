@@ -21,6 +21,8 @@ T = TypeVar("T")
 ENV_VAR_DVC_ENABLED = "DVC_ENABLED"
 ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
 ENV_VAR_DVC_SIZE_THRESHOLD = "DVC_SIZE_THRESHOLD"
+ENV_VAR_AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
+ENV_VAR_AWS_SECRET_ACCESS_KEY = "AWS_SECRET_ACCESS_KEY"
 
 # Default file size threshold: 100MB (files smaller than this stay in MLflow)
 DEFAULT_SIZE_THRESHOLD = 100 * 1024 * 1024
@@ -49,6 +51,159 @@ WEIGHT_FILE_EXTENSIONS = {
 
 # MLflow tag key for DVC files
 DVC_FILES_TAG_KEY = "dvc_files"
+
+# DVC default remote name
+DVC_DEFAULT_REMOTE_NAME = "storage"
+
+
+def _ensure_dvc_initialized() -> bool:
+    """
+    Ensure DVC is initialized in the current directory.
+
+    Uses --no-scm option to initialize without Git integration.
+
+    Returns:
+        True if DVC is already initialized or initialization succeeded.
+        False if initialization failed.
+    """
+    # Check if .dvc directory exists
+    if path.isdir(".dvc"):
+        logger.debug("DVC already initialized")
+        return True
+
+    logger.info("DVC: Initializing repository (--no-scm)")
+    result = subprocess.run(
+        ["dvc", "init", "--no-scm"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        logger.error(f"DVC init failed: {result.stderr}")
+        return False
+
+    logger.info("DVC: Repository initialized successfully")
+    return True
+
+
+def _validate_aws_credentials(remote_url: str) -> None:
+    """
+    Validate AWS credentials are set when using S3 remote.
+
+    Args:
+        remote_url: DVC remote URL
+
+    Raises:
+        DVCPushError: If S3 URL but AWS credentials are missing
+    """
+    if not remote_url.startswith("s3://"):
+        return
+
+    missing_vars = []
+    if not getenv(ENV_VAR_AWS_ACCESS_KEY_ID):
+        missing_vars.append(ENV_VAR_AWS_ACCESS_KEY_ID)
+    if not getenv(ENV_VAR_AWS_SECRET_ACCESS_KEY):
+        missing_vars.append(ENV_VAR_AWS_SECRET_ACCESS_KEY)
+
+    if missing_vars:
+        raise DVCPushError(
+            f"AWS credentials required for S3 remote. "
+            f"Missing environment variables: {', '.join(missing_vars)}"
+        )
+
+
+def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) -> None:
+    """
+    Ensure DVC remote is configured from environment variable.
+
+    Args:
+        remote_name: Name for the DVC remote (default: "storage")
+
+    Raises:
+        DVCPushError: If DVC_REMOTE_URL is not set or AWS credentials missing for S3
+    """
+    remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
+    if not remote_url:
+        raise DVCPushError(
+            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set. "
+        )
+
+    # Validate AWS credentials for S3 remote
+    _validate_aws_credentials(remote_url)
+
+    # Check if remote already exists with correct URL
+    result = subprocess.run(
+        ["dvc", "remote", "list"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0:
+        for line in result.stdout.strip().split("\n"):
+            if line:
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[0] == remote_name:
+                    existing_url = parts[1]
+                    if existing_url == remote_url:
+                        logger.debug(f"DVC remote '{remote_name}' already configured")
+                        return
+                    else:
+                        # Update existing remote with new URL
+                        logger.info(f"DVC: Updating remote '{remote_name}' URL")
+                        modify_result = subprocess.run(
+                            ["dvc", "remote", "modify", remote_name, "url", remote_url],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if modify_result.returncode == 0:
+                            logger.info(
+                                f"DVC: Remote '{remote_name}' updated to {remote_url}"
+                            )
+                            return
+                        else:
+                            raise DVCPushError(
+                                f"Failed to update DVC remote '{remote_name}': {modify_result.stderr}"
+                            )
+
+    # Add new remote
+    logger.info(f"DVC: Adding remote '{remote_name}' -> {remote_url}")
+    add_result = subprocess.run(
+        ["dvc", "remote", "add", "-d", remote_name, remote_url],
+        capture_output=True,
+        text=True,
+    )
+
+    if add_result.returncode != 0:
+        # Remote might already exist, try modifying
+        if "already exists" in add_result.stderr:
+            modify_result = subprocess.run(
+                ["dvc", "remote", "modify", remote_name, "url", remote_url],
+                capture_output=True,
+                text=True,
+            )
+            if modify_result.returncode == 0:
+                logger.info(f"DVC: Remote '{remote_name}' updated")
+                return
+        raise DVCPushError(
+            f"Failed to add DVC remote '{remote_name}': {add_result.stderr}"
+        )
+
+    logger.info(f"DVC: Remote '{remote_name}' configured successfully")
+
+
+def ensure_dvc_ready() -> None:
+    """
+    Ensure DVC is initialized and remote is configured.
+
+    This is called automatically by push_to_dvc().
+
+    Raises:
+        DVCPushError: If DVC initialization or remote configuration fails
+    """
+    if not _ensure_dvc_initialized():
+        raise DVCPushError("Failed to initialize DVC repository")
+
+    _ensure_dvc_remote_configured()
 
 
 class DVCError(Exception):
@@ -307,6 +462,8 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     """
     Add files to DVC and push to remote.
 
+    Automatically initializes DVC and configures remote if not already done.
+
     Args:
         file_paths: List of file paths to add to DVC
         fail_fast: If True, raise exception on first failure. If False, continue and report all failures.
@@ -317,6 +474,9 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     Raises:
         DVCPushError: If any DVC operation fails (when fail_fast=True)
     """
+    # Ensure DVC is initialized and remote is configured (raises DVCPushError on failure)
+    ensure_dvc_ready()
+
     dvc_info = {}
     failed_files = []
 
@@ -400,12 +560,27 @@ def pull_from_dvc(
         show_progress: If True, show download progress
 
     Raises:
-        DVCPullError: If download fails
+        DVCPullError: If download fails or required environment variables are missing
         ChecksumMismatchError: If checksum verification fails
     """
     remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
     if not remote_url:
-        raise ValueError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set")
+        raise DVCPullError(
+            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set. "
+        )
+
+    # Validate AWS credentials for S3 remote
+    if remote_url.startswith("s3://"):
+        missing_vars = []
+        if not getenv(ENV_VAR_AWS_ACCESS_KEY_ID):
+            missing_vars.append(ENV_VAR_AWS_ACCESS_KEY_ID)
+        if not getenv(ENV_VAR_AWS_SECRET_ACCESS_KEY):
+            missing_vars.append(ENV_VAR_AWS_SECRET_ACCESS_KEY)
+        if missing_vars:
+            raise DVCPullError(
+                f"AWS credentials required for S3 remote. "
+                f"Missing environment variables: {', '.join(missing_vars)}"
+            )
 
     total_files = len(dvc_files)
 

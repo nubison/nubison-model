@@ -19,6 +19,7 @@ from .Storage import (
     DVCError,
     DVCPullError,
     DVCPushError,
+    ensure_dvc_ready,
     is_dvc_enabled,
 )
 
@@ -35,6 +36,7 @@ __all__ = [
     "build_inference_service",
     "test_client",
     "is_dvc_enabled",
+    "ensure_dvc_ready",
     "DVCError",
     "DVCPushError",
     "DVCPullError",
