@@ -1,6 +1,6 @@
 import logging
 from importlib.metadata import distributions
-from os import getenv, path, symlink, walk
+from os import getenv, makedirs, path, symlink, walk
 from sys import version_info as py_version_info
 from typing import Any, List, Optional, Protocol, TypedDict, runtime_checkable
 
@@ -108,6 +108,10 @@ class NubisonMLFlowModel(PythonModel):
                 if not path.exists(target_path):
                     logger.debug(f"Skipping symlink for {name}: target not found (may be DVC file)")
                     continue
+                # Create parent directory if needed
+                parent_dir = path.dirname(name)
+                if parent_dir:
+                    makedirs(parent_dir, exist_ok=True)
                 symlink(target_path, name, target_is_directory=path.isdir(target_path))
                 logger.debug(f"Prepared artifact: {name} -> {target_path}")
             except OSError as e:
