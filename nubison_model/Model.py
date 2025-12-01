@@ -1,11 +1,25 @@
+import logging
 from importlib.metadata import distributions
-from os import getenv, path, symlink
+from os import getenv, path, symlink, walk
 from sys import version_info as py_version_info
 from typing import Any, List, Optional, Protocol, TypedDict, runtime_checkable
 
 import mlflow
 from mlflow.models.model import ModelInfo
 from mlflow.pyfunc import PythonModel
+
+from nubison_model.Storage import (
+    DVC_FILES_TAG_KEY,
+    find_weight_files,
+    get_size_threshold,
+    is_dvc_enabled,
+    push_to_dvc,
+    serialize_dvc_info,
+    should_use_dvc,
+)
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
 ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
@@ -85,15 +99,15 @@ class NubisonMLFlowModel(PythonModel):
     def prepare_artifacts(self, artifacts: dict) -> None:
         """Create symbolic links for the artifacts provided as a parameter."""
         if self._check_artifacts_prepared(artifacts):
-            print("Skipping artifact preparation as it was already done.")
+            logger.debug("Skipping artifact preparation as it was already done.")
             return
 
         for name, target_path in artifacts.items():
             try:
                 symlink(target_path, name, target_is_directory=path.isdir(target_path))
-                print(f"Prepared artifact: {name} -> {target_path}")
+                logger.debug(f"Prepared artifact: {name} -> {target_path}")
             except OSError as e:
-                print(f"Error creating symlink for {name}: {e}")
+                logger.error(f"Error creating symlink for {name}: {e}")
 
     def load_context(self, context: Any) -> None:
         """Make the MLFlow artifact accessible to the model in the same way as in the local environment
@@ -176,8 +190,22 @@ def _make_conda_env() -> dict:
     }
 
 
-def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
-    # Get the dict of artifact directories.
+def _make_artifact_dir_dict(
+    artifact_dirs: Optional[str],
+    exclude_weight_files: bool = False,
+    size_threshold: Optional[int] = None,
+) -> dict:
+    """
+    Get the dict of artifact directories.
+
+    Args:
+        artifact_dirs: Comma-separated list of directories/files to include
+        exclude_weight_files: If True, exclude weight files (.pt, .bin, etc.) that exceed size threshold
+        size_threshold: Minimum file size in bytes for DVC (default: from env or 100MB)
+
+    Returns:
+        Dictionary mapping artifact names to their paths
+    """
     # If not provided, read from environment variables, else use the default
     artifact_dirs_from_param_or_env = (
         artifact_dirs
@@ -185,12 +213,40 @@ def _make_artifact_dir_dict(artifact_dirs: Optional[str]) -> dict:
         else getenv("ARTIFACT_DIRS", DEFAULT_ARTIFACT_DIRS)
     )
 
-    # Return a dict with the directory as both the key and value
-    return {
-        dir.strip(): dir.strip()
-        for dir in artifact_dirs_from_param_or_env.split(",")
-        if dir != ""
-    }
+    if size_threshold is None:
+        size_threshold = get_size_threshold()
+
+    artifacts = {}
+    for dir_entry in artifact_dirs_from_param_or_env.split(","):
+        dir_entry = dir_entry.strip()
+        if not dir_entry:
+            continue
+
+        if path.isfile(dir_entry):
+            # Single file
+            if exclude_weight_files and should_use_dvc(dir_entry, size_threshold):
+                continue
+            artifacts[dir_entry] = dir_entry
+        elif path.isdir(dir_entry):
+            if exclude_weight_files:
+                # Walk directory and exclude weight files that exceed threshold
+                for root, _, files in walk(dir_entry):
+                    for file in files:
+                        full_path = path.join(root, file)
+                        if not should_use_dvc(full_path, size_threshold):
+                            # Use relative path from dir_entry as key
+                            rel_path = path.relpath(
+                                full_path, path.dirname(dir_entry) or "."
+                            )
+                            artifacts[rel_path] = full_path
+            else:
+                # Include entire directory
+                artifacts[dir_entry] = dir_entry
+        else:
+            # Path doesn't exist, include as-is (might be created later)
+            artifacts[dir_entry] = dir_entry
+
+    return artifacts
 
 
 def register(
@@ -203,6 +259,11 @@ def register(
     tags: Optional[dict[str, str]] = None,
 ):
     """Register a model with MLflow.
+
+    When DVC is enabled (DVC_ENABLED=true), large weight files (.pt, .bin, .pkl, etc.)
+    that exceed the size threshold are automatically uploaded to DVC remote storage
+    instead of MLflow. The DVC file hashes are stored in MLflow tags for retrieval
+    during serving.
 
     Args:
         model: The model to register, must implement NubisonModel protocol
@@ -218,6 +279,12 @@ def register(
 
     Raises:
         TypeError: If the model doesn't implement the NubisonModel protocol
+        DVCPushError: If DVC push fails for any weight file
+
+    Environment Variables:
+        DVC_ENABLED: Set to 'true' to enable DVC for large files
+        DVC_REMOTE_URL: URL of DVC remote storage (required when DVC is enabled)
+        DVC_SIZE_THRESHOLD: Minimum file size in bytes for DVC (default: 100MB)
     """
     # Check if the model implements the Model protocol
     if not isinstance(model, NubisonModel):
@@ -228,6 +295,35 @@ def register(
         model_name = getenv("MODEL_NAME", DEFAULT_MODEL_NAME)
     if mlflow_uri is None:
         mlflow_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI, DEAFULT_MLFLOW_URI)
+
+    # Initialize tags dict if not provided
+    tags = dict(tags) if tags else {}
+
+    # Handle DVC for large weight files
+    dvc_enabled = is_dvc_enabled()
+    dvc_info = {}
+    size_threshold = get_size_threshold()
+
+    if dvc_enabled and artifact_dirs:
+        # Find weight files in artifact directories that exceed size threshold
+        weight_files = find_weight_files(artifact_dirs, size_threshold)
+
+        if weight_files:
+            logger.info(
+                f"DVC enabled: Found {len(weight_files)} weight file(s) to upload via DVC "
+                f"(threshold: {size_threshold / (1024*1024):.0f} MB)"
+            )
+            for wf in weight_files:
+                file_size = path.getsize(wf) / (1024 * 1024)
+                logger.info(f"  - {wf} ({file_size:.1f} MB)")
+
+            # Push weight files to DVC and get their md5 hashes
+            # This will raise DVCPushError if any operation fails
+            dvc_info = push_to_dvc(weight_files, fail_fast=True)
+
+            # Store DVC info in tags
+            tags[DVC_FILES_TAG_KEY] = serialize_dvc_info(dvc_info)
+            logger.info(f"DVC: Uploaded {len(dvc_info)} file(s) to remote storage")
 
     # Set the MLflow tracking URI and experiment
     mlflow.set_tracking_uri(mlflow_uri)
@@ -244,15 +340,20 @@ def register(
             mlflow.set_tags(tags)
 
         # Log the model to MLflow
+        # Exclude weight files from artifacts if DVC is enabled
         model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=model_name,
             python_model=NubisonMLFlowModel(model),
             conda_env=_make_conda_env(),
-            artifacts=_make_artifact_dir_dict(artifact_dirs),
+            artifacts=_make_artifact_dir_dict(
+                artifact_dirs,
+                exclude_weight_files=dvc_enabled,
+                size_threshold=size_threshold,
+            ),
             artifact_path="",
         )
 
-        # Set tags on the registered model instead of the run
+        # Set tags on the registered model version
         if tags:
             client = mlflow.tracking.MlflowClient()
             for tag_name, tag_value in tags.items():
