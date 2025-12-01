@@ -12,6 +12,9 @@ from .Model import (
 )
 from .Service import build_inference_service, test_client
 from .Storage import (
+    ENV_VAR_AWS_ACCESS_KEY_ID,
+    ENV_VAR_AWS_ENDPOINT_URL,
+    ENV_VAR_AWS_SECRET_ACCESS_KEY,
     ENV_VAR_DVC_ENABLED,
     ENV_VAR_DVC_REMOTE_URL,
     ENV_VAR_DVC_SIZE_THRESHOLD,
@@ -29,6 +32,9 @@ __all__ = [
     "ENV_VAR_DVC_ENABLED",
     "ENV_VAR_DVC_REMOTE_URL",
     "ENV_VAR_DVC_SIZE_THRESHOLD",
+    "ENV_VAR_AWS_ACCESS_KEY_ID",
+    "ENV_VAR_AWS_SECRET_ACCESS_KEY",
+    "ENV_VAR_AWS_ENDPOINT_URL",
     "ModelContext",
     "NubisonModel",
     "NubisonMLFlowModel",

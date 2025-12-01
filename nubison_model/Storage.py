@@ -23,6 +23,7 @@ ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
 ENV_VAR_DVC_SIZE_THRESHOLD = "DVC_SIZE_THRESHOLD"
 ENV_VAR_AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
 ENV_VAR_AWS_SECRET_ACCESS_KEY = "AWS_SECRET_ACCESS_KEY"
+ENV_VAR_AWS_ENDPOINT_URL = "AWS_ENDPOINT_URL"  # Optional: for MinIO/S3-compatible storage
 
 # Default file size threshold: 100MB (files smaller than this stay in MLflow)
 DEFAULT_SIZE_THRESHOLD = 100 * 1024 * 1024
@@ -112,6 +113,44 @@ def _validate_aws_credentials(remote_url: str) -> None:
         )
 
 
+def _run_dvc_command(
+    args: List[str], error_msg: str, raise_on_error: bool = True
+) -> subprocess.CompletedProcess:
+    """
+    Run a DVC command and handle errors.
+
+    Args:
+        args: Command arguments list
+        error_msg: Error message prefix for DVCPushError
+        raise_on_error: If True, raise DVCPushError on failure
+
+    Returns:
+        CompletedProcess result
+
+    Raises:
+        DVCPushError: If command fails and raise_on_error is True
+    """
+    result = subprocess.run(args, capture_output=True, text=True)
+    if raise_on_error and result.returncode != 0:
+        raise DVCPushError(f"{error_msg}: {result.stderr}")
+    return result
+
+
+def _set_remote_option(remote_name: str, key: str, value: str) -> None:
+    """
+    Set a DVC remote configuration option.
+
+    Args:
+        remote_name: Name of the remote
+        key: Configuration key (e.g., "url", "endpointurl")
+        value: Configuration value
+    """
+    _run_dvc_command(
+        ["dvc", "remote", "modify", remote_name, key, value],
+        f"Failed to set DVC remote {key}",
+    )
+
+
 def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) -> None:
     """
     Ensure DVC remote is configured from environment variable.
@@ -125,70 +164,37 @@ def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) ->
     remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
     if not remote_url:
         raise DVCPushError(
-            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set. "
+            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set."
         )
 
     # Validate AWS credentials for S3 remote
     _validate_aws_credentials(remote_url)
 
-    # Check if remote already exists with correct URL
-    result = subprocess.run(
-        ["dvc", "remote", "list"],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode == 0:
-        for line in result.stdout.strip().split("\n"):
-            if line:
-                parts = line.split("\t")
-                if len(parts) >= 2 and parts[0] == remote_name:
-                    existing_url = parts[1]
-                    if existing_url == remote_url:
-                        logger.debug(f"DVC remote '{remote_name}' already configured")
-                        return
-                    else:
-                        # Update existing remote with new URL
-                        logger.info(f"DVC: Updating remote '{remote_name}' URL")
-                        modify_result = subprocess.run(
-                            ["dvc", "remote", "modify", remote_name, "url", remote_url],
-                            capture_output=True,
-                            text=True,
-                        )
-                        if modify_result.returncode == 0:
-                            logger.info(
-                                f"DVC: Remote '{remote_name}' updated to {remote_url}"
-                            )
-                            return
-                        else:
-                            raise DVCPushError(
-                                f"Failed to update DVC remote '{remote_name}': {modify_result.stderr}"
-                            )
-
-    # Add new remote
-    logger.info(f"DVC: Adding remote '{remote_name}' -> {remote_url}")
-    add_result = subprocess.run(
+    # Try to add new remote
+    logger.info(f"DVC: Configuring remote '{remote_name}' -> {remote_url}")
+    result = _run_dvc_command(
         ["dvc", "remote", "add", "-d", remote_name, remote_url],
-        capture_output=True,
-        text=True,
+        f"Failed to add DVC remote '{remote_name}'",
+        raise_on_error=False,
     )
 
-    if add_result.returncode != 0:
-        # Remote might already exist, try modifying
-        if "already exists" in add_result.stderr:
-            modify_result = subprocess.run(
-                ["dvc", "remote", "modify", remote_name, "url", remote_url],
-                capture_output=True,
-                text=True,
+    if result.returncode != 0:
+        if "already exists" in result.stderr:
+            # Update existing remote URL
+            _set_remote_option(remote_name, "url", remote_url)
+            logger.info(f"DVC: Remote '{remote_name}' updated")
+        else:
+            raise DVCPushError(
+                f"Failed to add DVC remote '{remote_name}': {result.stderr}"
             )
-            if modify_result.returncode == 0:
-                logger.info(f"DVC: Remote '{remote_name}' updated")
-                return
-        raise DVCPushError(
-            f"Failed to add DVC remote '{remote_name}': {add_result.stderr}"
-        )
+    else:
+        logger.info(f"DVC: Remote '{remote_name}' configured successfully")
 
-    logger.info(f"DVC: Remote '{remote_name}' configured successfully")
+    # Configure endpoint URL for MinIO/S3-compatible storage (optional)
+    endpoint_url = getenv(ENV_VAR_AWS_ENDPOINT_URL)
+    if endpoint_url:
+        logger.info(f"DVC: Setting endpointurl -> {endpoint_url}")
+        _set_remote_option(remote_name, "endpointurl", endpoint_url)
 
 
 def ensure_dvc_ready() -> None:
@@ -463,6 +469,7 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     Add files to DVC and push to remote.
 
     Automatically initializes DVC and configures remote if not already done.
+    Uses dvc.repo.Repo Python API for add and push operations.
 
     Args:
         file_paths: List of file paths to add to DVC
@@ -474,50 +481,56 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     Raises:
         DVCPushError: If any DVC operation fails (when fail_fast=True)
     """
+    from dvc.repo import Repo
+
     # Ensure DVC is initialized and remote is configured (raises DVCPushError on failure)
     ensure_dvc_ready()
 
     dvc_info = {}
     failed_files = []
 
+    try:
+        repo = Repo(".")
+    except Exception as e:
+        raise DVCPushError(f"Failed to open DVC repository: {e}")
+
     for file_path in file_paths:
-        # Run dvc add
-        result = subprocess.run(
-            ["dvc", "add", file_path],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            error_msg = f"dvc add failed for {file_path}: {result.stderr}"
+        try:
+            # Use DVC Python API for add
+            repo.add(file_path)
+            logger.info(f"DVC: Added {file_path}")
+
+            # Parse the generated .dvc file
+            dvc_file = f"{file_path}.dvc"
+            md5 = parse_dvc_file(dvc_file)
+
+            if md5:
+                dvc_info[file_path] = md5
+                logger.info(f"DVC: {file_path} (md5: {md5[:8]}...)")
+            else:
+                error_msg = f"Failed to parse .dvc file for {file_path}"
+                if fail_fast:
+                    raise DVCPushError(error_msg)
+                logger.error(error_msg)
+                failed_files.append(file_path)
+
+        except DVCPushError:
+            raise
+        except Exception as e:
+            error_msg = f"dvc add failed for {file_path}: {e}"
             if fail_fast:
                 raise DVCPushError(error_msg)
             logger.error(error_msg)
             failed_files.append(file_path)
-            continue
 
-        # Parse the generated .dvc file
-        dvc_file = f"{file_path}.dvc"
-        md5 = parse_dvc_file(dvc_file)
-
-        if md5:
-            dvc_info[file_path] = md5
-            logger.info(f"DVC: Added {file_path} (md5: {md5[:8]}...)")
-        else:
-            error_msg = f"Failed to parse .dvc file for {file_path}"
-            if fail_fast:
-                raise DVCPushError(error_msg)
-            logger.error(error_msg)
-            failed_files.append(file_path)
-
-    # Push all files to remote
+    # Push all files to remote using DVC Python API
     if dvc_info:
-        result = subprocess.run(
-            ["dvc", "push"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            error_msg = f"dvc push failed: {result.stderr}"
+        try:
+            dvc_files = [f"{fp}.dvc" for fp in dvc_info.keys()]
+            repo.push(dvc_files)
+            logger.info("DVC: Push completed successfully")
+        except Exception as e:
+            error_msg = f"dvc push failed: {e}"
             if fail_fast:
                 raise DVCPushError(error_msg)
             logger.error(error_msg)
@@ -636,7 +649,13 @@ def _download_from_remote(
 def _download_from_s3(
     remote_path: str, local_path: str, show_progress: bool = True
 ) -> None:
-    """Download file from S3 with retry logic."""
+    """Download file from S3 with retry logic.
+
+    Supports custom endpoint URL for MinIO/S3-compatible storage via AWS_ENDPOINT_URL env var.
+    """
+    # Get optional endpoint URL for MinIO/S3-compatible storage
+    endpoint_url = getenv(ENV_VAR_AWS_ENDPOINT_URL)
+
     try:
         import boto3
         from botocore.exceptions import ClientError
@@ -646,7 +665,11 @@ def _download_from_s3(
         bucket = path_parts[0]
         key = path_parts[1] if len(path_parts) > 1 else ""
 
-        s3 = boto3.client("s3")
+        # Create S3 client with optional endpoint URL
+        if endpoint_url:
+            s3 = boto3.client("s3", endpoint_url=endpoint_url)
+        else:
+            s3 = boto3.client("s3")
 
         if show_progress:
             # Get file size for progress
@@ -662,8 +685,11 @@ def _download_from_s3(
     except ImportError:
         # Fallback to AWS CLI
         logger.debug("boto3 not available, using AWS CLI")
+        aws_command = ["aws", "s3", "cp", remote_path, local_path]
+        if endpoint_url:
+            aws_command.extend(["--endpoint-url", endpoint_url])
         result = subprocess.run(
-            ["aws", "s3", "cp", remote_path, local_path],
+            aws_command,
             capture_output=True,
             text=True,
         )
