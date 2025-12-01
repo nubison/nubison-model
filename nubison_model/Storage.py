@@ -649,15 +649,17 @@ def _download_from_remote(
 def _download_from_s3(
     remote_path: str, local_path: str, show_progress: bool = True
 ) -> None:
-    """Download file from S3 with retry logic.
+    """Download file from S3 with retry logic and multipart download.
 
     Supports custom endpoint URL for MinIO/S3-compatible storage via AWS_ENDPOINT_URL env var.
+    Uses multipart download for large files to improve download speed.
     """
     # Get optional endpoint URL for MinIO/S3-compatible storage
     endpoint_url = getenv(ENV_VAR_AWS_ENDPOINT_URL)
 
     try:
         import boto3
+        from boto3.s3.transfer import TransferConfig
         from botocore.exceptions import ClientError
 
         # Parse S3 URL: s3://bucket/key
@@ -671,6 +673,7 @@ def _download_from_s3(
         else:
             s3 = boto3.client("s3")
 
+        file_size = 0
         if show_progress:
             # Get file size for progress
             try:
@@ -680,7 +683,17 @@ def _download_from_s3(
             except ClientError:
                 pass
 
-        s3.download_file(bucket, key, local_path)
+        # Configure multipart download for faster transfers
+        # multipart_threshold: Use multipart for files larger than 8MB
+        # max_concurrency: Number of parallel download threads
+        # multipart_chunksize: Size of each chunk
+        transfer_config = TransferConfig(
+            multipart_threshold=8 * 1024 * 1024,  # 8MB
+            max_concurrency=10,
+            multipart_chunksize=8 * 1024 * 1024,  # 8MB chunks
+        )
+
+        s3.download_file(bucket, key, local_path, Config=transfer_config)
 
     except ImportError:
         # Fallback to AWS CLI
