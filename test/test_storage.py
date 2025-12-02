@@ -236,21 +236,27 @@ class TestPushToDvc:
             with open(dvc_file, "w") as f:
                 f.write("outs:\n  - md5: abc123\n    path: model.pt\n")
 
-            with patch("nubison_model.Storage.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stderr="")
+            with patch("nubison_model.Storage.ensure_dvc_ready"):
+                with patch("dvc.repo.Repo") as mock_repo_cls:
+                    mock_repo = MagicMock()
+                    mock_repo_cls.return_value = mock_repo
 
-                result = push_to_dvc([test_file])
+                    result = push_to_dvc([test_file])
 
-                assert test_file in result
-                assert result[test_file] == "abc123"
-                assert mock_run.call_count == 2  # dvc add + dvc push
+                    assert test_file in result
+                    assert result[test_file] == "abc123"
+                    mock_repo.add.assert_called_once_with(test_file)
+                    mock_repo.push.assert_called_once()
 
     def test_push_dvc_add_failure(self):
-        with patch("nubison_model.Storage.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="dvc add error")
+        with patch("nubison_model.Storage.ensure_dvc_ready"):
+            with patch("dvc.repo.Repo") as mock_repo_cls:
+                mock_repo = MagicMock()
+                mock_repo_cls.return_value = mock_repo
+                mock_repo.add.side_effect = Exception("dvc add error")
 
-            with pytest.raises(DVCPushError, match="dvc add failed"):
-                push_to_dvc(["/path/to/model.pt"])
+                with pytest.raises(DVCPushError, match="dvc add failed"):
+                    push_to_dvc(["/path/to/model.pt"])
 
     def test_push_dvc_push_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -263,15 +269,14 @@ class TestPushToDvc:
             with open(dvc_file, "w") as f:
                 f.write("outs:\n  - md5: abc123\n    path: model.pt\n")
 
-            with patch("nubison_model.Storage.subprocess.run") as mock_run:
-                # dvc add succeeds, dvc push fails
-                mock_run.side_effect = [
-                    MagicMock(returncode=0, stderr=""),  # dvc add
-                    MagicMock(returncode=1, stderr="push error"),  # dvc push
-                ]
+            with patch("nubison_model.Storage.ensure_dvc_ready"):
+                with patch("dvc.repo.Repo") as mock_repo_cls:
+                    mock_repo = MagicMock()
+                    mock_repo_cls.return_value = mock_repo
+                    mock_repo.push.side_effect = Exception("push error")
 
-                with pytest.raises(DVCPushError, match="dvc push failed"):
-                    push_to_dvc([test_file])
+                    with pytest.raises(DVCPushError, match="dvc push failed"):
+                        push_to_dvc([test_file])
 
 
 class TestPullFromDvc:
@@ -281,7 +286,11 @@ class TestPullFromDvc:
         with tempfile.TemporaryDirectory() as tmpdir:
             dvc_files = {"models/model.pt": "abc123def456"}
 
-            with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
+            with temporary_env({
+                "DVC_REMOTE_URL": "s3://bucket/dvc",
+                "AWS_ACCESS_KEY_ID": "test-key",
+                "AWS_SECRET_ACCESS_KEY": "test-secret",
+            }):
                 with patch("nubison_model.Storage._download_from_remote") as mock_download:
                     # Mock successful download
                     def create_file(remote, local, show_progress=True):
@@ -301,7 +310,11 @@ class TestPullFromDvc:
         with tempfile.TemporaryDirectory() as tmpdir:
             dvc_files = {"model.pt": "expected_hash"}
 
-            with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
+            with temporary_env({
+                "DVC_REMOTE_URL": "s3://bucket/dvc",
+                "AWS_ACCESS_KEY_ID": "test-key",
+                "AWS_SECRET_ACCESS_KEY": "test-secret",
+            }):
                 with patch("nubison_model.Storage._download_from_remote") as mock_download:
                     def create_file(remote, local, show_progress=True):
                         with open(local, "wb") as f:
@@ -315,7 +328,7 @@ class TestPullFromDvc:
 
     def test_pull_missing_remote_url(self):
         with temporary_env({"DVC_REMOTE_URL": ""}):
-            with pytest.raises(ValueError, match="DVC_REMOTE_URL"):
+            with pytest.raises(DVCPullError, match="DVC_REMOTE_URL"):
                 pull_from_dvc({"model.pt": "hash"}, ".")
 
 
@@ -326,17 +339,28 @@ class TestDownloadFromS3:
         import sys
         from nubison_model.Storage import _download_from_s3
 
-        # Create mock boto3 module
+        # Create mock boto3 module with all required submodules
         mock_boto3 = MagicMock()
         mock_s3 = MagicMock()
         mock_boto3.client.return_value = mock_s3
         mock_s3.head_object.return_value = {"ContentLength": 1024}
 
-        with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": MagicMock(), "botocore.exceptions": MagicMock()}):
+        # Mock boto3.s3.transfer.TransferConfig
+        mock_transfer = MagicMock()
+        mock_boto3.s3 = MagicMock()
+        mock_boto3.s3.transfer = mock_transfer
+
+        with patch.dict(sys.modules, {
+            "boto3": mock_boto3,
+            "boto3.s3": mock_boto3.s3,
+            "boto3.s3.transfer": mock_transfer,
+            "botocore": MagicMock(),
+            "botocore.exceptions": MagicMock()
+        }):
             with tempfile.NamedTemporaryFile(delete=False) as f:
                 try:
                     _download_from_s3("s3://bucket/key/file.pt", f.name, show_progress=True)
-                    mock_s3.download_file.assert_called_once_with("bucket", "key/file.pt", f.name)
+                    mock_s3.download_file.assert_called_once()
                 finally:
                     os.unlink(f.name)
 

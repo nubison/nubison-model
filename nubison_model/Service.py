@@ -93,6 +93,51 @@ def _extract_and_cache_model_path(mlflow_model, path_file):
         pass
 
 
+def _parse_model_uri(model_uri: str) -> Optional[tuple]:
+    """
+    Parse MLflow model URI into components.
+
+    Args:
+        model_uri: Model URI (e.g., 'models:/model_name/version' or 'runs:/run_id/path')
+
+    Returns:
+        Tuple of (uri_type, name, version_or_path) or None if invalid format
+        - uri_type: 'models' or 'runs'
+        - For 'models': (model_name, version_or_stage)
+        - For 'runs': (run_id, artifact_path or None)
+    """
+    uri_prefixes = [("models:/", "models"), ("runs:/", "runs")]
+
+    for prefix, uri_type in uri_prefixes:
+        if model_uri.startswith(prefix):
+            parts = model_uri[len(prefix) :].split("/", 1)
+            if parts and parts[0]:
+                second_part = parts[1] if len(parts) > 1 else None
+                return (uri_type, parts[0], second_part)
+    return None
+
+
+def _get_model_version(client, model_name: str, version_or_stage: str):
+    """
+    Get MLflow model version, handling both numeric versions and stage names.
+
+    Args:
+        client: MLflow client
+        model_name: Name of the registered model
+        version_or_stage: Version number (as string) or stage name
+
+    Returns:
+        ModelVersion object or None if not found
+    """
+    try:
+        version = int(version_or_stage)
+        return client.get_model_version(model_name, str(version))
+    except ValueError:
+        # It's a stage name, get latest version in that stage
+        versions = client.get_latest_versions(model_name, stages=[version_or_stage])
+        return versions[0] if versions else None
+
+
 def _get_dvc_info_from_model_uri(mlflow_tracking_uri: str, model_uri: str) -> dict:
     """
     Extract DVC file info from MLflow model version tags.
@@ -108,43 +153,24 @@ def _get_dvc_info_from_model_uri(mlflow_tracking_uri: str, model_uri: str) -> di
     client = mlflow.tracking.MlflowClient()
 
     try:
-        # Parse model URI to get model name and version
-        # Format: models:/model_name/version or models:/model_name/stage
-        if model_uri.startswith("models:/"):
-            parts = model_uri[8:].split("/")
-            if len(parts) >= 2:
-                model_name = parts[0]
-                version_or_stage = parts[1]
+        parsed = _parse_model_uri(model_uri)
+        if not parsed:
+            return {}
 
-                # Try to get model version
-                try:
-                    # If it's a number, it's a version
-                    version = int(version_or_stage)
-                    mv = client.get_model_version(model_name, str(version))
-                except ValueError:
-                    # It's a stage name, get latest version in that stage
-                    versions = client.get_latest_versions(
-                        model_name, stages=[version_or_stage]
-                    )
-                    if versions:
-                        mv = versions[0]
-                    else:
-                        return {}
+        uri_type, identifier, extra = parsed
 
-                # Get DVC info from model version tags
+        if uri_type == "models" and extra:
+            mv = _get_model_version(client, identifier, extra)
+            if mv:
                 dvc_files_json = mv.tags.get(DVC_FILES_TAG_KEY)
                 if dvc_files_json:
                     return deserialize_dvc_info(dvc_files_json)
 
-        # Try getting from run tags if model version tags don't have it
-        elif model_uri.startswith("runs:/"):
-            parts = model_uri[6:].split("/")
-            if parts:
-                run_id = parts[0]
-                run = client.get_run(run_id)
-                dvc_files_json = run.data.tags.get(DVC_FILES_TAG_KEY)
-                if dvc_files_json:
-                    return deserialize_dvc_info(dvc_files_json)
+        elif uri_type == "runs":
+            run = client.get_run(identifier)
+            dvc_files_json = run.data.tags.get(DVC_FILES_TAG_KEY)
+            if dvc_files_json:
+                return deserialize_dvc_info(dvc_files_json)
 
     except Exception as e:
         logger.warning(f"Could not retrieve DVC info from MLflow: {e}")
@@ -168,6 +194,23 @@ def _cleanup_old_dvc_done_files(shared_info_dir: str, current_dvc_done_file: str
                 logger.debug(f"Cleaned up old DVC done file: {old_file}")
             except OSError as e:
                 logger.warning(f"Failed to remove old DVC done file {old_file}: {e}")
+
+
+def _needs_dvc_restoration(dvc_enabled: bool, dvc_info: dict, dvc_done_file: str) -> bool:
+    """
+    Check if DVC files need to be restored for this model version.
+
+    Args:
+        dvc_enabled: Whether DVC is enabled
+        dvc_info: Dictionary of DVC file info (empty if no DVC files)
+        dvc_done_file: Path to the DVC done marker file
+
+    Returns:
+        True if DVC restoration is needed, False otherwise
+    """
+    if not dvc_enabled or not dvc_info or not dvc_done_file:
+        return False
+    return not os.path.exists(dvc_done_file)
 
 
 def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
@@ -254,7 +297,7 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     cached_model = _load_cached_model_if_available(mlflow_tracking_uri, path_file)
     if cached_model:
         # Even if model is cached, check if DVC files need restoration for this version
-        if dvc_enabled and dvc_info and dvc_done_file and not os.path.exists(dvc_done_file):
+        if _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
             logger.info("Model cached but DVC files need restoration for this version")
             # Will proceed to restore DVC files below
         else:
@@ -271,7 +314,7 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
             )
             if cached_model:
                 # Check DVC restoration status again under lock
-                if not (dvc_enabled and dvc_info and dvc_done_file and not os.path.exists(dvc_done_file)):
+                if not _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
                     return cached_model
 
             # Load model and extract path for caching
@@ -283,22 +326,21 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
             _extract_and_cache_model_path(mlflow_model, path_file)
 
             # Restore DVC files if enabled and not already done for this version
-            if dvc_enabled and dvc_info and dvc_done_file:
-                if not os.path.exists(dvc_done_file):
-                    # Clean up old DVC done files from previous versions
-                    _cleanup_old_dvc_done_files(shared_info_dir, dvc_done_file)
+            if _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
+                # Clean up old DVC done files from previous versions
+                _cleanup_old_dvc_done_files(shared_info_dir, dvc_done_file)
 
-                    # Get model root directory for DVC file restoration
-                    model_root = "."
-                    if os.path.exists(path_file):
-                        with open(path_file, "r") as f:
-                            model_root = f.read().strip()
+                # Get model root directory for DVC file restoration
+                model_root = "."
+                if os.path.exists(path_file):
+                    with open(path_file, "r") as f:
+                        model_root = f.read().strip()
 
-                    _restore_dvc_files(dvc_info, model_root)
+                _restore_dvc_files(dvc_info, model_root)
 
-                    # Mark DVC restoration as done for this version
-                    with open(dvc_done_file, "w") as f:
-                        f.write(f"version:{mlflow_model_uri}")
+                # Mark DVC restoration as done for this version
+                with open(dvc_done_file, "w") as f:
+                    f.write(f"version:{mlflow_model_uri}")
 
             return nubison_model
 

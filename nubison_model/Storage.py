@@ -57,6 +57,37 @@ DVC_FILES_TAG_KEY = "dvc_files"
 DVC_DEFAULT_REMOTE_NAME = "storage"
 
 
+# Exception classes
+class DVCError(Exception):
+    """Base exception for DVC operations."""
+
+    pass
+
+
+class DVCPushError(DVCError):
+    """Exception raised when DVC push fails."""
+
+    pass
+
+
+class DVCPullError(DVCError):
+    """Exception raised when DVC pull fails."""
+
+    pass
+
+
+class ChecksumMismatchError(DVCError):
+    """Exception raised when file checksum doesn't match expected value."""
+
+    pass
+
+
+class PathTraversalError(DVCError):
+    """Exception raised when path traversal attack is detected."""
+
+    pass
+
+
 def _ensure_dvc_initialized() -> bool:
     """
     Ensure DVC is initialized in the current directory.
@@ -87,15 +118,18 @@ def _ensure_dvc_initialized() -> bool:
     return True
 
 
-def _validate_aws_credentials(remote_url: str) -> None:
+def _validate_aws_credentials(
+    remote_url: str, error_class: type = DVCPushError
+) -> None:
     """
     Validate AWS credentials are set when using S3 remote.
 
     Args:
         remote_url: DVC remote URL
+        error_class: Exception class to raise on validation failure
 
     Raises:
-        DVCPushError: If S3 URL but AWS credentials are missing
+        error_class: If S3 URL but AWS credentials are missing
     """
     if not remote_url.startswith("s3://"):
         return
@@ -107,7 +141,7 @@ def _validate_aws_credentials(remote_url: str) -> None:
         missing_vars.append(ENV_VAR_AWS_SECRET_ACCESS_KEY)
 
     if missing_vars:
-        raise DVCPushError(
+        raise error_class(
             f"AWS credentials required for S3 remote. "
             f"Missing environment variables: {', '.join(missing_vars)}"
         )
@@ -210,36 +244,6 @@ def ensure_dvc_ready() -> None:
         raise DVCPushError("Failed to initialize DVC repository")
 
     _ensure_dvc_remote_configured()
-
-
-class DVCError(Exception):
-    """Base exception for DVC operations."""
-
-    pass
-
-
-class DVCPushError(DVCError):
-    """Exception raised when DVC push fails."""
-
-    pass
-
-
-class DVCPullError(DVCError):
-    """Exception raised when DVC pull fails."""
-
-    pass
-
-
-class ChecksumMismatchError(DVCError):
-    """Exception raised when file checksum doesn't match expected value."""
-
-    pass
-
-
-class PathTraversalError(DVCError):
-    """Exception raised when path traversal attack is detected."""
-
-    pass
 
 
 def validate_safe_path(base_dir: str, file_path: str) -> str:
@@ -583,17 +587,7 @@ def pull_from_dvc(
         )
 
     # Validate AWS credentials for S3 remote
-    if remote_url.startswith("s3://"):
-        missing_vars = []
-        if not getenv(ENV_VAR_AWS_ACCESS_KEY_ID):
-            missing_vars.append(ENV_VAR_AWS_ACCESS_KEY_ID)
-        if not getenv(ENV_VAR_AWS_SECRET_ACCESS_KEY):
-            missing_vars.append(ENV_VAR_AWS_SECRET_ACCESS_KEY)
-        if missing_vars:
-            raise DVCPullError(
-                f"AWS credentials required for S3 remote. "
-                f"Missing environment variables: {', '.join(missing_vars)}"
-            )
+    _validate_aws_credentials(remote_url, DVCPullError)
 
     total_files = len(dvc_files)
 
@@ -620,26 +614,45 @@ def pull_from_dvc(
             logger.debug(f"DVC: Checksum verified for {file_path}")
 
 
+def _get_downloader(remote_path: str):
+    """
+    Get appropriate downloader function based on URL scheme.
+
+    Args:
+        remote_path: Remote URL of the file
+
+    Returns:
+        Tuple of (downloader_function, supports_progress)
+    """
+    schemes = [
+        ("s3://", _download_from_s3, True),
+        ("http://", _download_from_http, True),
+        ("https://", _download_from_http, True),
+    ]
+    for scheme, downloader, supports_progress in schemes:
+        if remote_path.startswith(scheme):
+            return downloader, supports_progress
+    return _download_with_dvc, False
+
+
 def _download_from_remote(
     remote_path: str, local_path: str, show_progress: bool = True
 ) -> None:
     """
     Download a file from remote storage.
 
-    Supports S3 and HTTP(S) URLs.
+    Supports S3 and HTTP(S) URLs with fallback to DVC.
 
     Args:
         remote_path: Remote URL of the file
         local_path: Local path to save the file
         show_progress: If True, show download progress
     """
-    if remote_path.startswith("s3://"):
-        _download_from_s3(remote_path, local_path, show_progress)
-    elif remote_path.startswith("http://") or remote_path.startswith("https://"):
-        _download_from_http(remote_path, local_path, show_progress)
+    downloader, supports_progress = _get_downloader(remote_path)
+    if supports_progress:
+        downloader(remote_path, local_path, show_progress)
     else:
-        # Try using DVC's get command as fallback
-        _download_with_dvc(remote_path, local_path)
+        downloader(remote_path, local_path)
 
 
 @retry_with_backoff(
