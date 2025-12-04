@@ -22,6 +22,7 @@ ENV_VAR_DVC_ENABLED = "DVC_ENABLED"
 ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
 ENV_VAR_DVC_SIZE_THRESHOLD = "DVC_SIZE_THRESHOLD"
 ENV_VAR_DVC_JOBS = "DVC_JOBS"
+ENV_VAR_DVC_FILE_EXTENSIONS = "DVC_FILE_EXTENSIONS"
 ENV_VAR_AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
 ENV_VAR_AWS_SECRET_ACCESS_KEY = "AWS_SECRET_ACCESS_KEY"
 ENV_VAR_AWS_ENDPOINT_URL = "AWS_ENDPOINT_URL"
@@ -270,10 +271,24 @@ def get_size_threshold() -> int:
     return DEFAULT_SIZE_THRESHOLD
 
 
+def get_weight_extensions() -> set:
+    """Get weight file extensions (default + custom from env)."""
+    extensions = set(WEIGHT_FILE_EXTENSIONS)
+    custom = getenv(ENV_VAR_DVC_FILE_EXTENSIONS, "")
+    if custom:
+        for ext in custom.split(","):
+            ext = ext.strip().lower()
+            if ext:
+                if not ext.startswith("."):
+                    ext = "." + ext
+                extensions.add(ext)
+    return extensions
+
+
 def is_weight_file(filepath: str) -> bool:
     """Check if a file is a weight file based on its extension."""
     _, ext = path.splitext(filepath.lower())
-    return ext in WEIGHT_FILE_EXTENSIONS
+    return ext in get_weight_extensions()
 
 
 def should_use_dvc(filepath: str, size_threshold: Optional[int] = None) -> bool:
