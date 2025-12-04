@@ -231,9 +231,11 @@ def _make_artifact_dir_dict(
             if entry.strip()
         }
 
-    # With exclusion: iterate files and filter
+    # With exclusion: iterate files and filter, preserving directory structure
+    # Use path.dirname(base_dir) to keep the base_dir name in the artifact path
+    # e.g., "src/model.py" instead of just "model.py"
     return {
-        path.relpath(full_path, base_dir): full_path
+        path.join(path.basename(base_dir), path.relpath(full_path, base_dir)): full_path
         for full_path, base_dir in iter_artifact_files(artifact_dirs_str)
         if not should_use_dvc(full_path, size_threshold)
     }

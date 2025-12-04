@@ -18,6 +18,7 @@ T = TypeVar("T")
 ENV_VAR_DVC_ENABLED = "DVC_ENABLED"
 ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
 ENV_VAR_DVC_SIZE_THRESHOLD = "DVC_SIZE_THRESHOLD"
+ENV_VAR_DVC_JOBS = "DVC_JOBS"
 ENV_VAR_AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
 ENV_VAR_AWS_SECRET_ACCESS_KEY = "AWS_SECRET_ACCESS_KEY"
 ENV_VAR_AWS_ENDPOINT_URL = "AWS_ENDPOINT_URL"
@@ -181,6 +182,11 @@ def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) ->
     if endpoint_url:
         logger.info(f"DVC: Setting endpointurl -> {endpoint_url}")
         _set_remote_option(remote_name, "endpointurl", endpoint_url)
+
+    jobs = getenv(ENV_VAR_DVC_JOBS)
+    if jobs:
+        logger.info(f"DVC: Setting jobs -> {jobs}")
+        _set_remote_option(remote_name, "jobs", jobs)
 
 
 def ensure_dvc_ready() -> None:
@@ -353,54 +359,47 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
 
     ensure_dvc_ready()
 
-    dvc_info = {}
-    failed_files = []
-
     try:
         repo = Repo(".")
     except Exception as e:
         raise DVCPushError(f"Failed to open DVC repository: {e}")
 
+    # Batch add all files at once for better performance
+    try:
+        repo.add(file_paths)
+        logger.info(f"DVC: Added {len(file_paths)} file(s)")
+    except Exception as e:
+        raise DVCPushError(f"dvc add failed: {e}")
+
+    # Parse .dvc files to extract md5 hashes
+    dvc_info = {}
+    failed_files = []
+
     for file_path in file_paths:
-        try:
-            repo.add(file_path)
-            logger.info(f"DVC: Added {file_path}")
+        dvc_file = f"{file_path}.dvc"
+        md5 = parse_dvc_file(dvc_file)
 
-            dvc_file = f"{file_path}.dvc"
-            md5 = parse_dvc_file(dvc_file)
-
-            if md5:
-                dvc_info[file_path] = md5
-                logger.info(f"DVC: {file_path} (md5: {md5[:8]}...)")
-            else:
-                error_msg = f"Failed to parse .dvc file for {file_path}"
-                if fail_fast:
-                    raise DVCPushError(error_msg)
-                logger.error(error_msg)
-                failed_files.append(file_path)
-
-        except DVCPushError:
-            raise
-        except Exception as e:
-            error_msg = f"dvc add failed for {file_path}: {e}"
+        if md5:
+            dvc_info[file_path] = md5
+            logger.info(f"DVC: {file_path} (md5: {md5[:8]}...)")
+        else:
+            error_msg = f"Failed to parse .dvc file for {file_path}"
             if fail_fast:
                 raise DVCPushError(error_msg)
             logger.error(error_msg)
             failed_files.append(file_path)
 
+    if failed_files:
+        raise DVCPushError(f"DVC add failed for files: {failed_files}")
+
+    # Push all files to remote
     if dvc_info:
         try:
             dvc_files = [f"{fp}.dvc" for fp in dvc_info.keys()]
             repo.push(dvc_files)
             logger.info("DVC: Push completed successfully")
         except Exception as e:
-            error_msg = f"dvc push failed: {e}"
-            if fail_fast:
-                raise DVCPushError(error_msg)
-            logger.error(error_msg)
-
-    if failed_files:
-        raise DVCPushError(f"DVC push failed for files: {failed_files}")
+            raise DVCPushError(f"dvc push failed: {e}")
 
     return dvc_info
 

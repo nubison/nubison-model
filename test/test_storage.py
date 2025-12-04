@@ -245,7 +245,7 @@ class TestPushToDvc:
 
                     assert test_file in result
                     assert result[test_file] == "abc123"
-                    mock_repo.add.assert_called_once_with(test_file)
+                    mock_repo.add.assert_called_once_with([test_file])
                     mock_repo.push.assert_called_once()
 
     def test_push_dvc_add_failure(self):
