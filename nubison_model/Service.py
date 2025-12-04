@@ -180,8 +180,27 @@ def _cleanup_old_dvc_done_files(shared_info_dir: str, current_dvc_done_file: str
                 logger.warning(f"Failed to remove old DVC done file {old_file}: {e}")
 
 
+def _create_dvc_symlinks(dvc_info: dict, model_root: str) -> None:
+    """Create symlinks for DVC-restored files in current working directory."""
+    for file_path in dvc_info.keys():
+        target_path = os.path.join(model_root, file_path)
+        if not os.path.exists(target_path):
+            continue
+        try:
+            parent_dir = os.path.dirname(file_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            is_dir = os.path.isdir(target_path)
+            os.symlink(target_path, file_path, target_is_directory=is_dir)
+            logger.debug(f"DVC: Created symlink {file_path} -> {target_path}")
+        except (FileNotFoundError, FileExistsError):
+            pass
+        except OSError as e:
+            logger.error(f"Error creating symlink for {file_path}: {e}")
+
+
 def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
-    """Restore DVC-tracked files to the model directory."""
+    """Restore DVC-tracked files to the model directory and create symlinks."""
     if not dvc_info:
         return
 
@@ -189,6 +208,7 @@ def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
 
     try:
         pull_from_dvc(dvc_info, model_root, verify_checksum=True, show_progress=True)
+        _create_dvc_symlinks(dvc_info, model_root)
         logger.info("DVC: Files restored successfully")
     except (DVCPullError, ChecksumMismatchError) as e:
         logger.error(f"Failed to restore DVC files: {e}")
