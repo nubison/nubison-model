@@ -237,7 +237,7 @@ class TestPushToDvc:
                 f.write("outs:\n  - md5: abc123\n    path: model.pt\n")
 
             with patch("nubison_model.Storage.ensure_dvc_ready"):
-                with patch("dvc.repo.Repo") as mock_repo_cls:
+                with patch("nubison_model.Storage.Repo") as mock_repo_cls:
                     mock_repo = MagicMock()
                     mock_repo_cls.return_value = mock_repo
 
@@ -250,7 +250,7 @@ class TestPushToDvc:
 
     def test_push_dvc_add_failure(self):
         with patch("nubison_model.Storage.ensure_dvc_ready"):
-            with patch("dvc.repo.Repo") as mock_repo_cls:
+            with patch("nubison_model.Storage.Repo") as mock_repo_cls:
                 mock_repo = MagicMock()
                 mock_repo_cls.return_value = mock_repo
                 mock_repo.add.side_effect = Exception("dvc add error")
@@ -270,7 +270,7 @@ class TestPushToDvc:
                 f.write("outs:\n  - md5: abc123\n    path: model.pt\n")
 
             with patch("nubison_model.Storage.ensure_dvc_ready"):
-                with patch("dvc.repo.Repo") as mock_repo_cls:
+                with patch("nubison_model.Storage.Repo") as mock_repo_cls:
                     mock_repo = MagicMock()
                     mock_repo_cls.return_value = mock_repo
                     mock_repo.push.side_effect = Exception("push error")

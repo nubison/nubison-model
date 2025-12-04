@@ -5,11 +5,14 @@ import json
 import logging
 import subprocess
 import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
-from os import getenv, makedirs, path, walk
+from os import cpu_count, getenv, makedirs, path, walk
 from typing import Callable, Dict, List, Optional, Tuple, TypeVar
 
 import yaml
+from dvc.repo import Repo
 
 logger = logging.getLogger(__name__)
 
@@ -355,8 +358,6 @@ def verify_file_checksum(file_path: str, expected_md5: str) -> bool:
 
 def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]:
     """Add files to DVC and push to remote. Returns dict mapping paths to md5 hashes."""
-    from dvc.repo import Repo
-
     ensure_dvc_ready()
 
     try:
@@ -415,7 +416,7 @@ def pull_from_dvc(
     verify_checksum: bool = True,
     show_progress: bool = True,
 ) -> None:
-    """Download files from DVC remote storage using md5 hashes."""
+    """Download files from DVC remote storage using md5 hashes with parallel downloads."""
     remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
     if not remote_url:
         raise DVCPullError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set.")
@@ -423,22 +424,28 @@ def pull_from_dvc(
     _validate_aws_credentials(remote_url, DVCPullError)
 
     total_files = len(dvc_files)
+    workers = int(getenv(ENV_VAR_DVC_JOBS) or max(1, (cpu_count() or 4)))
 
-    for idx, (file_path, md5) in enumerate(dvc_files.items(), 1):
+    def download_single(item: Tuple[str, str]) -> str:
+        file_path, md5 = item
         local_path = validate_safe_path(local_base_dir, file_path)
         remote_path = get_dvc_remote_path(remote_url, md5)
-
         makedirs(path.dirname(local_path) or ".", exist_ok=True)
+        _download_from_remote(remote_path, local_path, show_progress=False)
+        if verify_checksum and not verify_file_checksum(local_path, md5):
+            raise ChecksumMismatchError(f"Checksum mismatch for {file_path}: expected {md5}")
+        return file_path
 
-        if show_progress:
-            logger.info(f"DVC: Downloading [{idx}/{total_files}] {file_path}...")
+    if show_progress:
+        logger.info(f"DVC: Downloading {total_files} file(s) with {workers} workers...")
 
-        _download_from_remote(remote_path, local_path, show_progress=show_progress)
-
-        if verify_checksum:
-            if not verify_file_checksum(local_path, md5):
-                raise ChecksumMismatchError(f"Checksum mismatch for {file_path}: expected {md5}")
-            logger.debug(f"DVC: Checksum verified for {file_path}")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(download_single, item): item[0] for item in dvc_files.items()}
+        for future in as_completed(futures):
+            file_path = futures[future]
+            future.result()  # Raises exception if download failed
+            if show_progress:
+                logger.info(f"DVC: Downloaded {file_path}")
 
 
 def _get_downloader(remote_path: str):
@@ -519,8 +526,6 @@ def _download_from_http(
     remote_path: str, local_path: str, show_progress: bool = True
 ) -> None:
     """Download file from HTTP(S) URL with retry logic."""
-    import urllib.request
-
     if show_progress:
         try:
             with urllib.request.urlopen(remote_path) as response:
