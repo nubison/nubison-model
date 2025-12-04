@@ -252,11 +252,14 @@ def test_load_nubison_mlflow_model_single_worker():
                     "nubison_model.Service.load_model",
                     return_value=MockMLflowModel(model_path),
                 ):
-                    result = load_nubison_mlflow_model("http://test", "model_uri")
+                    model_uri = "model_uri"
+                    result = load_nubison_mlflow_model("http://test", model_uri)
                     assert isinstance(result, NubisonMLFlowModel)
 
-                    # Verify path file was created
-                    path_file = os.path.join(temp_dir, "shared") + ".path"
+                    # Verify path file was created (now includes model cache key)
+                    from nubison_model.Service import _get_model_cache_key
+                    model_cache_key = _get_model_cache_key(model_uri)
+                    path_file = os.path.join(temp_dir, "shared") + f".path_{model_cache_key}"
                     assert os.path.exists(path_file)
                     with open(path_file, "r") as f:
                         cached_path = f.read().strip()
@@ -265,6 +268,7 @@ def test_load_nubison_mlflow_model_single_worker():
 
 def test_corrupted_cache_file_handling():
     """Test handling of corrupted or invalid cache files."""
+    from nubison_model.Service import _get_model_cache_key
 
     class MockNubisonModel:
         def infer(self, test: str):
@@ -281,7 +285,12 @@ def test_corrupted_cache_file_handling():
 
     with tempfile.TemporaryDirectory() as temp_dir:
         shared_dir = os.path.join(temp_dir, "shared")
-        path_file = shared_dir + ".path"
+        model_uri = "model_uri"
+        model_cache_key = _get_model_cache_key(model_uri)
+        path_file = f"{shared_dir}.path_{model_cache_key}"
+
+        # Ensure parent directory exists for path_file
+        os.makedirs(os.path.dirname(path_file), exist_ok=True)
 
         # Test 1: Cache file points to non-existent path
         with open(path_file, "w") as f:
@@ -295,16 +304,16 @@ def test_corrupted_cache_file_handling():
                 side_effect=mock_load_model_wrapper,
             ) as mock_wrapper:
                 # First call should try cached path and fail, then fallback to original URI
-                def side_effect_cached_failure(tracking_uri, model_uri):
-                    if model_uri == "/non/existent/path":
+                def side_effect_cached_failure(tracking_uri, uri):
+                    if uri == "/non/existent/path":
                         raise FileNotFoundError("Model file not found")
-                    return mock_load_model_wrapper(tracking_uri, model_uri)
+                    return mock_load_model_wrapper(tracking_uri, uri)
 
                 mock_wrapper.side_effect = side_effect_cached_failure
 
                 # Should handle the cached path failure and fallback to original URI
                 with pytest.raises(FileNotFoundError):
-                    load_nubison_mlflow_model("http://test", "model_uri")
+                    load_nubison_mlflow_model("http://test", model_uri)
 
         # Test 2: Empty cache file
         fallback_calls.clear()
@@ -319,15 +328,15 @@ def test_corrupted_cache_file_handling():
                 side_effect=mock_load_model_wrapper,
             ) as mock_wrapper:
 
-                def side_effect_empty_path(tracking_uri, model_uri):
-                    if model_uri == "":
+                def side_effect_empty_path(tracking_uri, uri):
+                    if uri == "":
                         raise ValueError("Empty model path")
-                    return mock_load_model_wrapper(tracking_uri, model_uri)
+                    return mock_load_model_wrapper(tracking_uri, uri)
 
                 mock_wrapper.side_effect = side_effect_empty_path
 
                 with pytest.raises(ValueError):
-                    load_nubison_mlflow_model("http://test", "model_uri")
+                    load_nubison_mlflow_model("http://test", model_uri)
 
 
 def test_download_exception_cleanup():

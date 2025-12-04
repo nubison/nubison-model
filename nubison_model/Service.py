@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import logging
 import os
 import tempfile
@@ -44,6 +45,11 @@ DEFAULT_REQUEST_TIMEOUT = 60
 def _get_shared_artifacts_dir():
     """Get the shared artifacts directory path (OS-compatible)."""
     return os.path.join(tempfile.gettempdir(), "nubison_shared_artifacts")
+
+
+def _get_model_cache_key(model_uri: str) -> str:
+    """Generate a cache key from model URI."""
+    return hashlib.md5(model_uri.encode()).hexdigest()[:12]
 
 
 def _load_model_with_nubison_wrapper(mlflow_tracking_uri, model_uri):
@@ -265,8 +271,9 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
         raise RuntimeError("MLflow tracking URI and model URI must be set")
 
     shared_info_dir = _get_shared_artifacts_dir()
-    lock_file = shared_info_dir + ".lock"
-    path_file = shared_info_dir + ".path"
+    model_cache_key = _get_model_cache_key(mlflow_model_uri)
+    lock_file = f"{shared_info_dir}.lock_{model_cache_key}"
+    path_file = f"{shared_info_dir}.path_{model_cache_key}"
 
     dvc_info = _get_dvc_info_from_model_uri(mlflow_tracking_uri, mlflow_model_uri) if is_dvc_enabled() else {}
     dvc_cache_key = get_dvc_cache_key(mlflow_model_uri, dvc_info) if dvc_info else ""
