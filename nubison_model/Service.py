@@ -32,7 +32,6 @@ from nubison_model.Storage import (
 )
 from nubison_model.utils import temporary_cwd
 
-# Setup logging
 logger = logging.getLogger(__name__)
 
 ENV_VAR_NUM_WORKERS = "NUM_WORKERS"
@@ -133,59 +132,44 @@ def _get_model_version(client, model_name: str, version_or_stage: str):
         version = int(version_or_stage)
         return client.get_model_version(model_name, str(version))
     except ValueError:
-        # It's a stage name, get latest version in that stage
         versions = client.get_latest_versions(model_name, stages=[version_or_stage])
         return versions[0] if versions else None
 
 
+def _get_tags_for_uri(client, model_uri: str) -> Optional[dict]:
+    """Extract tags from MLflow based on URI type."""
+    parsed = _parse_model_uri(model_uri)
+    if not parsed:
+        return None
+
+    uri_type, identifier, extra = parsed
+
+    if uri_type == "models" and extra:
+        mv = _get_model_version(client, identifier, extra)
+        return mv.tags if mv else None
+
+    if uri_type == "runs":
+        return client.get_run(identifier).data.tags
+
+    return None
+
+
 def _get_dvc_info_from_model_uri(mlflow_tracking_uri: str, model_uri: str) -> dict:
-    """
-    Extract DVC file info from MLflow model version tags.
-
-    Args:
-        mlflow_tracking_uri: MLflow tracking server URI
-        model_uri: Model URI (e.g., 'models:/model_name/version')
-
-    Returns:
-        Dictionary mapping file paths to md5 hashes, or empty dict if not found
-    """
+    """Extract DVC file info from MLflow model version tags."""
     set_tracking_uri(mlflow_tracking_uri)
     client = mlflow.tracking.MlflowClient()
 
     try:
-        parsed = _parse_model_uri(model_uri)
-        if not parsed:
-            return {}
-
-        uri_type, identifier, extra = parsed
-
-        if uri_type == "models" and extra:
-            mv = _get_model_version(client, identifier, extra)
-            if mv:
-                dvc_files_json = mv.tags.get(DVC_FILES_TAG_KEY)
-                if dvc_files_json:
-                    return deserialize_dvc_info(dvc_files_json)
-
-        elif uri_type == "runs":
-            run = client.get_run(identifier)
-            dvc_files_json = run.data.tags.get(DVC_FILES_TAG_KEY)
-            if dvc_files_json:
-                return deserialize_dvc_info(dvc_files_json)
-
+        tags = _get_tags_for_uri(client, model_uri)
+        dvc_json = tags.get(DVC_FILES_TAG_KEY) if tags else None
+        return deserialize_dvc_info(dvc_json) if dvc_json else {}
     except Exception as e:
         logger.warning(f"Could not retrieve DVC info from MLflow: {e}")
-
-    return {}
+        return {}
 
 
 def _cleanup_old_dvc_done_files(shared_info_dir: str, current_dvc_done_file: str) -> None:
-    """
-    Clean up old DVC done files from previous model versions.
-
-    Args:
-        shared_info_dir: Base directory for shared artifacts
-        current_dvc_done_file: Path to the current DVC done file (to preserve)
-    """
+    """Clean up old DVC done files from previous model versions."""
     pattern = shared_info_dir + ".dvc_done_*"
     for old_file in glob.glob(pattern):
         if old_file != current_dvc_done_file:
@@ -196,35 +180,8 @@ def _cleanup_old_dvc_done_files(shared_info_dir: str, current_dvc_done_file: str
                 logger.warning(f"Failed to remove old DVC done file {old_file}: {e}")
 
 
-def _needs_dvc_restoration(dvc_enabled: bool, dvc_info: dict, dvc_done_file: str) -> bool:
-    """
-    Check if DVC files need to be restored for this model version.
-
-    Args:
-        dvc_enabled: Whether DVC is enabled
-        dvc_info: Dictionary of DVC file info (empty if no DVC files)
-        dvc_done_file: Path to the DVC done marker file
-
-    Returns:
-        True if DVC restoration is needed, False otherwise
-    """
-    if not dvc_enabled or not dvc_info or not dvc_done_file:
-        return False
-    return not os.path.exists(dvc_done_file)
-
-
 def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
-    """
-    Restore DVC-tracked files to the model directory.
-
-    Args:
-        dvc_info: Dictionary mapping file paths to md5 hashes
-        model_root: Root directory of the model artifacts
-
-    Raises:
-        DVCPullError: If download fails
-        ChecksumMismatchError: If checksum verification fails
-    """
+    """Restore DVC-tracked files to the model directory."""
     if not dvc_info:
         return
 
@@ -241,38 +198,48 @@ def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
         raise DVCPullError(f"Failed to restore DVC files: {e}") from e
 
 
+def _get_model_root(path_file: str) -> str:
+    """Get model root directory from cached path file."""
+    if not os.path.exists(path_file):
+        return "."
+    with open(path_file, "r") as f:
+        return f.read().strip() or "."
+
+
+def _mark_dvc_done(dvc_done_file: str, model_uri: str) -> None:
+    """Mark DVC restoration as complete for this version."""
+    with open(dvc_done_file, "w") as f:
+        f.write(f"version:{model_uri}")
+
+
+def _handle_dvc_restoration(
+    dvc_info: dict, dvc_done_file: str, shared_info_dir: str, path_file: str, model_uri: str
+) -> None:
+    """Handle DVC file restoration if needed."""
+    if not dvc_info or not dvc_done_file or os.path.exists(dvc_done_file):
+        return
+
+    _cleanup_old_dvc_done_files(shared_info_dir, dvc_done_file)
+    _restore_dvc_files(dvc_info, _get_model_root(path_file))
+    _mark_dvc_done(dvc_done_file, model_uri)
+
+
 def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     """Load a Nubison MLflow model with robust caching and multi-worker support.
 
-    This function implements a sophisticated model loading strategy that uses FileLock
-    for inter-process synchronization, ensuring only one worker downloads the model
-    while others wait and reuse the cached result. Includes automatic timeout handling
-    and fallback mechanisms for production reliability.
-
-    When DVC is enabled, this function also restores large weight files from DVC
-    remote storage based on the file hashes stored in MLflow tags. The restoration
-    is version-aware: each model version has its own cache key, ensuring that
-    different versions don't incorrectly share DVC files.
+    Uses FileLock for inter-process synchronization. When DVC is enabled,
+    restores large weight files from DVC remote storage.
 
     Args:
-        mlflow_tracking_uri (str): MLflow tracking server URI for model registry access
-        mlflow_model_uri (str): Model URI in MLflow format (e.g., 'models:/model_name/version')
+        mlflow_tracking_uri: MLflow tracking server URI
+        mlflow_model_uri: Model URI (e.g., 'models:/model_name/version')
 
     Returns:
-        NubisonMLFlowModel: Loaded and wrapped model ready for inference
+        NubisonMLFlowModel: Loaded model ready for inference
 
     Raises:
         RuntimeError: If required URIs are not provided
         DVCPullError: If DVC file restoration fails
-        ChecksumMismatchError: If downloaded file checksum doesn't match
-
-    Note:
-        Uses 5-minute timeout and double-check pattern to prevent race conditions.
-        Automatically extracts and caches local model paths for faster subsequent loads.
-
-    Environment Variables:
-        DVC_ENABLED: Set to 'true' to enable DVC file restoration
-        DVC_REMOTE_URL: URL of DVC remote storage (required when DVC is enabled)
     """
     if not mlflow_tracking_uri or not mlflow_model_uri:
         raise RuntimeError("MLflow tracking URI and model URI must be set")
@@ -281,75 +248,34 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     lock_file = shared_info_dir + ".lock"
     path_file = shared_info_dir + ".path"
 
-    # Check if DVC is enabled and get DVC info early
-    dvc_enabled = is_dvc_enabled()
-    dvc_info = {}
-    if dvc_enabled:
-        dvc_info = _get_dvc_info_from_model_uri(mlflow_tracking_uri, mlflow_model_uri)
-
-    # Generate version-specific cache key for DVC restoration
+    dvc_info = _get_dvc_info_from_model_uri(mlflow_tracking_uri, mlflow_model_uri) if is_dvc_enabled() else {}
     dvc_cache_key = get_dvc_cache_key(mlflow_model_uri, dvc_info) if dvc_info else ""
-    dvc_done_file = (
-        f"{shared_info_dir}.dvc_done_{dvc_cache_key}" if dvc_cache_key else ""
-    )
+    dvc_done_file = f"{shared_info_dir}.dvc_done_{dvc_cache_key}" if dvc_cache_key else ""
 
-    # Try loading from cache first
+    needs_dvc = bool(dvc_info and dvc_done_file and not os.path.exists(dvc_done_file))
+
     cached_model = _load_cached_model_if_available(mlflow_tracking_uri, path_file)
-    if cached_model:
-        # Even if model is cached, check if DVC files need restoration for this version
-        if _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
-            logger.info("Model cached but DVC files need restoration for this version")
-            # Will proceed to restore DVC files below
-        else:
-            return cached_model
-
-    # Use FileLock for robust locking with timeout
-    file_lock = FileLock(lock_file, timeout=300)
+    if cached_model and not needs_dvc:
+        return cached_model
 
     try:
-        with file_lock:
-            # Double-check pattern: verify cache doesn't exist after acquiring lock
-            cached_model = _load_cached_model_if_available(
-                mlflow_tracking_uri, path_file
-            )
-            if cached_model:
-                # Check DVC restoration status again under lock
-                if not _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
-                    return cached_model
+        with FileLock(lock_file, timeout=300):
+            needs_dvc = bool(dvc_info and dvc_done_file and not os.path.exists(dvc_done_file))
+            cached_model = _load_cached_model_if_available(mlflow_tracking_uri, path_file)
+            if cached_model and not needs_dvc:
+                return cached_model
 
-            # Load model and extract path for caching
             mlflow_model, nubison_model = _load_model_with_nubison_wrapper(
                 mlflow_tracking_uri, mlflow_model_uri
             )
-
-            # Cache model path for other workers
             _extract_and_cache_model_path(mlflow_model, path_file)
-
-            # Restore DVC files if enabled and not already done for this version
-            if _needs_dvc_restoration(dvc_enabled, dvc_info, dvc_done_file):
-                # Clean up old DVC done files from previous versions
-                _cleanup_old_dvc_done_files(shared_info_dir, dvc_done_file)
-
-                # Get model root directory for DVC file restoration
-                model_root = "."
-                if os.path.exists(path_file):
-                    with open(path_file, "r") as f:
-                        model_root = f.read().strip()
-
-                _restore_dvc_files(dvc_info, model_root)
-
-                # Mark DVC restoration as done for this version
-                with open(dvc_done_file, "w") as f:
-                    f.write(f"version:{mlflow_model_uri}")
+            _handle_dvc_restoration(dvc_info, dvc_done_file, shared_info_dir, path_file, mlflow_model_uri)
 
             return nubison_model
 
     except Timeout:
-        logger.warning("Lock acquisition timed out, falling back to direct load")
-        # Fallback to original URI if lock timeout occurs
-        _, nubison_model = _load_model_with_nubison_wrapper(
-            mlflow_tracking_uri, mlflow_model_uri
-        )
+        logger.warning("Lock timeout, falling back to direct load")
+        _, nubison_model = _load_model_with_nubison_wrapper(mlflow_tracking_uri, mlflow_model_uri)
         return nubison_model
 
 

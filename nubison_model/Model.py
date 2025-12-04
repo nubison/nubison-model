@@ -1,6 +1,6 @@
 import logging
 from importlib.metadata import distributions
-from os import getenv, makedirs, path, symlink, walk
+from os import getenv, makedirs, path, symlink
 from sys import version_info as py_version_info
 from typing import Any, List, Optional, Protocol, TypedDict, runtime_checkable
 
@@ -13,12 +13,12 @@ from nubison_model.Storage import (
     find_weight_files,
     get_size_threshold,
     is_dvc_enabled,
+    iter_artifact_files,
     push_to_dvc,
     serialize_dvc_info,
     should_use_dvc,
 )
 
-# Setup logging
 logger = logging.getLogger(__name__)
 
 ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
@@ -104,11 +104,11 @@ class NubisonMLFlowModel(PythonModel):
 
         for name, target_path in artifacts.items():
             try:
-                # Skip if target doesn't exist (may be restored later by DVC)
                 if not path.exists(target_path):
-                    logger.debug(f"Skipping symlink for {name}: target not found (may be DVC file)")
+                    logger.debug(
+                        f"Skipping symlink for {name}: target not found (may be DVC file)"
+                    )
                     continue
-                # Create parent directory if needed
                 parent_dir = path.dirname(name)
                 if parent_dir:
                     makedirs(parent_dir, exist_ok=True)
@@ -214,47 +214,32 @@ def _make_artifact_dir_dict(
     Returns:
         Dictionary mapping artifact names to their paths
     """
-    # If not provided, read from environment variables, else use the default
-    artifact_dirs_from_param_or_env = (
+    artifact_dirs_str = (
         artifact_dirs
         if artifact_dirs is not None
         else getenv("ARTIFACT_DIRS", DEFAULT_ARTIFACT_DIRS)
     )
 
+    if not artifact_dirs_str:
+        return {}
+
     if size_threshold is None:
         size_threshold = get_size_threshold()
 
-    artifacts = {}
-    for dir_entry in artifact_dirs_from_param_or_env.split(","):
-        dir_entry = dir_entry.strip()
-        if not dir_entry:
-            continue
+    # Fast path: no exclusion needed, return directories as-is
+    if not exclude_weight_files:
+        return {
+            entry.strip(): entry.strip()
+            for entry in artifact_dirs_str.split(",")
+            if entry.strip()
+        }
 
-        if path.isfile(dir_entry):
-            # Single file
-            if exclude_weight_files and should_use_dvc(dir_entry, size_threshold):
-                continue
-            artifacts[dir_entry] = dir_entry
-        elif path.isdir(dir_entry):
-            if exclude_weight_files:
-                # Walk directory and exclude weight files that exceed threshold
-                for root, _, files in walk(dir_entry):
-                    for file in files:
-                        full_path = path.join(root, file)
-                        if not should_use_dvc(full_path, size_threshold):
-                            # Use relative path from dir_entry as key
-                            rel_path = path.relpath(
-                                full_path, path.dirname(dir_entry) or "."
-                            )
-                            artifacts[rel_path] = full_path
-            else:
-                # Include entire directory
-                artifacts[dir_entry] = dir_entry
-        else:
-            # Path doesn't exist, include as-is (might be created later)
-            artifacts[dir_entry] = dir_entry
-
-    return artifacts
+    # With exclusion: iterate files and filter
+    return {
+        path.relpath(full_path, base_dir): full_path
+        for full_path, base_dir in iter_artifact_files(artifact_dirs_str)
+        if not should_use_dvc(full_path, size_threshold)
+    }
 
 
 def register(
@@ -296,7 +281,7 @@ def register(
     """
     # Check if the model implements the Model protocol
     if not isinstance(model, NubisonModel):
-        raise TypeError("The model must implement the Model protocol")
+        raise TypeError("The model must implement the NubisonModel protocol")
 
     # Get the model name and MLflow URI from environment variables if not provided
     if model_name is None:
@@ -304,16 +289,13 @@ def register(
     if mlflow_uri is None:
         mlflow_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI, DEAFULT_MLFLOW_URI)
 
-    # Initialize tags dict if not provided
     tags = dict(tags) if tags else {}
 
-    # Handle DVC for large weight files
     dvc_enabled = is_dvc_enabled()
     dvc_info = {}
     size_threshold = get_size_threshold()
 
     if dvc_enabled and artifact_dirs:
-        # Find weight files in artifact directories that exceed size threshold
         weight_files = find_weight_files(artifact_dirs, size_threshold)
 
         if weight_files:
@@ -325,11 +307,7 @@ def register(
                 file_size = path.getsize(wf) / (1024 * 1024)
                 logger.info(f"  - {wf} ({file_size:.1f} MB)")
 
-            # Push weight files to DVC and get their md5 hashes
-            # This will raise DVCPushError if any operation fails
             dvc_info = push_to_dvc(weight_files, fail_fast=True)
-
-            # Store DVC info in tags
             tags[DVC_FILES_TAG_KEY] = serialize_dvc_info(dvc_info)
             logger.info(f"DVC: Uploaded {len(dvc_info)} file(s) to remote storage")
 
