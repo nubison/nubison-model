@@ -104,16 +104,13 @@ class NubisonMLFlowModel(PythonModel):
 
         for name, target_path in artifacts.items():
             try:
-                if not path.exists(target_path):
-                    logger.debug(
-                        f"Skipping symlink for {name}: target not found (may be DVC file)"
-                    )
-                    continue
                 parent_dir = path.dirname(name)
                 if parent_dir:
                     makedirs(parent_dir, exist_ok=True)
                 symlink(target_path, name, target_is_directory=path.isdir(target_path))
                 logger.debug(f"Prepared artifact: {name} -> {target_path}")
+            except FileNotFoundError:
+                logger.debug(f"Skipping symlink for {name}: target not found (may be DVC file)")
             except OSError as e:
                 logger.error(f"Error creating symlink for {name}: {e}")
 
