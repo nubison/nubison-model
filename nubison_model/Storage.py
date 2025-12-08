@@ -11,7 +11,9 @@ from functools import wraps
 from os import cpu_count, getenv, makedirs, path, walk
 from typing import Callable, Dict, List, Optional, Tuple, TypeVar
 
+import boto3
 import yaml
+from boto3.s3.transfer import TransferConfig
 from dvc.repo import Repo
 
 logger = logging.getLogger(__name__)
@@ -23,8 +25,6 @@ ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
 ENV_VAR_DVC_SIZE_THRESHOLD = "DVC_SIZE_THRESHOLD"
 ENV_VAR_DVC_JOBS = "DVC_JOBS"
 ENV_VAR_DVC_FILE_EXTENSIONS = "DVC_FILE_EXTENSIONS"
-ENV_VAR_AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
-ENV_VAR_AWS_SECRET_ACCESS_KEY = "AWS_SECRET_ACCESS_KEY"
 ENV_VAR_AWS_ENDPOINT_URL = "AWS_ENDPOINT_URL"
 
 DEFAULT_SIZE_THRESHOLD = 100 * 1024 * 1024
@@ -111,35 +111,6 @@ def _ensure_dvc_initialized() -> bool:
     return True
 
 
-def _validate_aws_credentials(
-    remote_url: str, error_class: type = DVCPushError
-) -> None:
-    """
-    Validate AWS credentials are set when using S3 remote.
-
-    Args:
-        remote_url: DVC remote URL
-        error_class: Exception class to raise on validation failure
-
-    Raises:
-        error_class: If S3 URL but AWS credentials are missing
-    """
-    if not remote_url.startswith("s3://"):
-        return
-
-    missing_vars = []
-    if not getenv(ENV_VAR_AWS_ACCESS_KEY_ID):
-        missing_vars.append(ENV_VAR_AWS_ACCESS_KEY_ID)
-    if not getenv(ENV_VAR_AWS_SECRET_ACCESS_KEY):
-        missing_vars.append(ENV_VAR_AWS_SECRET_ACCESS_KEY)
-
-    if missing_vars:
-        raise error_class(
-            f"AWS credentials required for S3 remote. "
-            f"Missing environment variables: {', '.join(missing_vars)}"
-        )
-
-
 def _run_dvc_command(
     args: List[str], error_msg: str, raise_on_error: bool = True
 ) -> subprocess.CompletedProcess:
@@ -163,8 +134,6 @@ def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) ->
     remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
     if not remote_url:
         raise DVCPushError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set.")
-
-    _validate_aws_credentials(remote_url)
 
     logger.info(f"DVC: Configuring remote '{remote_name}' -> {remote_url}")
     result = _run_dvc_command(
@@ -436,8 +405,6 @@ def pull_from_dvc(
     if not remote_url:
         raise DVCPullError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set.")
 
-    _validate_aws_credentials(remote_url, DVCPullError)
-
     total_files = len(dvc_files)
     workers = int(getenv(ENV_VAR_DVC_JOBS) or max(1, (cpu_count() or 4)))
 
@@ -493,47 +460,28 @@ def _parse_s3_url(url: str) -> Tuple[str, str]:
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
-def _download_s3_with_cli(remote_path: str, local_path: str, endpoint_url: Optional[str]) -> None:
-    """Download from S3 using AWS CLI."""
-    cmd = ["aws", "s3", "cp", remote_path, local_path]
-    if endpoint_url:
-        cmd.extend(["--endpoint-url", endpoint_url])
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise DVCPullError(f"AWS CLI download failed: {result.stderr}")
-
-
 @retry_with_backoff(max_retries=DEFAULT_MAX_RETRIES, exceptions=(Exception,))
 def _download_from_s3(
     remote_path: str, local_path: str, show_progress: bool = True
 ) -> None:
     """Download file from S3 with multipart download."""
     endpoint_url = getenv(ENV_VAR_AWS_ENDPOINT_URL)
+    bucket, key = _parse_s3_url(remote_path)
+    s3 = boto3.client("s3", endpoint_url=endpoint_url) if endpoint_url else boto3.client("s3")
 
-    try:
-        import boto3
-        from boto3.s3.transfer import TransferConfig
+    if show_progress:
+        try:
+            size = s3.head_object(Bucket=bucket, Key=key).get("ContentLength", 0)
+            logger.info(f"  Size: {size / (1024*1024):.1f} MB")
+        except Exception:
+            pass
 
-        bucket, key = _parse_s3_url(remote_path)
-        s3 = boto3.client("s3", endpoint_url=endpoint_url) if endpoint_url else boto3.client("s3")
-
-        if show_progress:
-            try:
-                size = s3.head_object(Bucket=bucket, Key=key).get("ContentLength", 0)
-                logger.info(f"  Size: {size / (1024*1024):.1f} MB")
-            except Exception:
-                pass
-
-        config = TransferConfig(
-            multipart_threshold=8 * 1024 * 1024,
-            max_concurrency=10,
-            multipart_chunksize=8 * 1024 * 1024,
-        )
-        s3.download_file(bucket, key, local_path, Config=config)
-
-    except ImportError:
-        logger.debug("boto3 not available, using AWS CLI")
-        _download_s3_with_cli(remote_path, local_path, endpoint_url)
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,
+        max_concurrency=10,
+        multipart_chunksize=8 * 1024 * 1024,
+    )
+    s3.download_file(bucket, key, local_path, Config=config)
 
 
 @retry_with_backoff(max_retries=DEFAULT_MAX_RETRIES, exceptions=(Exception,))
