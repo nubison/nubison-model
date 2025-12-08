@@ -107,9 +107,11 @@ class NubisonMLFlowModel(PythonModel):
                 parent_dir = path.dirname(name)
                 if parent_dir:
                     makedirs(parent_dir, exist_ok=True)
-                symlink(target_path, name, target_is_directory=path.isdir(target_path))
+                # Check if target is a directory; default to False if path doesn't exist (e.g., broken symlink)
+                is_dir = path.isdir(target_path) if path.exists(target_path) else False
+                symlink(target_path, name, target_is_directory=is_dir)
                 logger.debug(f"Prepared artifact: {name} -> {target_path}")
-            except (FileNotFoundError, FileExistsError):
+            except FileExistsError:
                 pass
             except OSError as e:
                 logger.error(f"Error creating symlink for {name}: {e}")
