@@ -327,16 +327,12 @@ def register(
             mlflow.set_tags(tags)
 
         # Log the model to MLflow
-        # Exclude weight files from artifacts if DVC is enabled
+        # Always use folder structure to maintain consistent artifact paths
         model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=model_name,
             python_model=NubisonMLFlowModel(model),
             conda_env=_make_conda_env(),
-            artifacts=_make_artifact_dir_dict(
-                artifact_dirs,
-                exclude_weight_files=dvc_enabled,
-                size_threshold=size_threshold,
-            ),
+            artifacts=_make_artifact_dir_dict(artifact_dirs),
             artifact_path="",
         )
 
