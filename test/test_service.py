@@ -433,13 +433,13 @@ def test_restore_dvc_files_success():
     """Test successful DVC file restoration."""
     from nubison_model.Service import _restore_dvc_files
 
-    with patch("nubison_model.Service.pull_from_dvc") as mock_pull:
-        dvc_info = {"model.pt": "abc123"}
-        _restore_dvc_files(dvc_info, "/model/root")
+    with tempfile.TemporaryDirectory() as model_root:
+        with patch("nubison_model.Service.pull_from_dvc") as mock_pull:
+            dvc_info = {"model.pt": "abc123"}
+            _restore_dvc_files(dvc_info, model_root)
 
-        mock_pull.assert_called_once_with(
-            dvc_info, "/model/root", show_progress=True
-        )
+            # Should be called with "." since we use temporary_cwd(model_root)
+            mock_pull.assert_called_once_with(dvc_info, ".", show_progress=True)
 
 
 def test_restore_dvc_files_failure():
@@ -447,11 +447,12 @@ def test_restore_dvc_files_failure():
     from nubison_model.Service import _restore_dvc_files
     from nubison_model.Storage import DVCPullError
 
-    with patch("nubison_model.Service.pull_from_dvc") as mock_pull:
-        mock_pull.side_effect = DVCPullError("Download failed")
+    with tempfile.TemporaryDirectory() as model_root:
+        with patch("nubison_model.Service.pull_from_dvc") as mock_pull:
+            mock_pull.side_effect = DVCPullError("Download failed")
 
-        with pytest.raises(DVCPullError):
-            _restore_dvc_files({"model.pt": "abc123"}, "/model/root")
+            with pytest.raises(DVCPullError):
+                _restore_dvc_files({"model.pt": "abc123"}, model_root)
 
 
 def test_load_model_with_dvc_enabled():

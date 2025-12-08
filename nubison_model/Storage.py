@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import subprocess
-from os import cpu_count, getenv, makedirs, path, walk
+from os import cpu_count, getenv, path, walk
 from typing import Dict, List, Optional
 
 import yaml
@@ -325,7 +325,10 @@ def pull_from_dvc(
     local_base_dir: str = ".",
     show_progress: bool = True,
 ) -> None:
-    """Download files from DVC remote using dvc pull command."""
+    """Download files from DVC remote using dvc pull command.
+
+    Expects .dvc files to already exist in local_base_dir (from MLflow artifacts).
+    """
     if not getenv(ENV_VAR_DVC_REMOTE_URL):
         raise DVCPullError(
             f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set."
@@ -336,14 +339,16 @@ def pull_from_dvc(
     jobs = getenv(ENV_VAR_DVC_JOBS) or str(cpu_count() or 4)
     dvc_file_paths = []
 
-    for file_path, md5 in dvc_files.items():
+    for file_path in dvc_files.keys():
         local_path = validate_safe_path(local_base_dir, file_path)
-        makedirs(path.dirname(local_path) or ".", exist_ok=True)
-
         dvc_file_path = f"{local_path}.dvc"
-        dvc_content = {"outs": [{"md5": md5, "path": path.basename(file_path)}]}
-        with open(dvc_file_path, "w") as f:
-            yaml.dump(dvc_content, f)
+
+        if not path.exists(dvc_file_path):
+            raise DVCPullError(
+                f"DVC file not found: {dvc_file_path}. "
+                "Ensure model was registered with DVC-tracked files."
+            )
+
         dvc_file_paths.append(dvc_file_path)
 
     if show_progress:

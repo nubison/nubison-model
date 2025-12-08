@@ -251,6 +251,11 @@ class TestPullFromDvc:
         with tempfile.TemporaryDirectory() as tmpdir:
             dvc_files = {"model.pt": "abc123def456"}
 
+            # Create .dvc file (simulating MLflow artifact download)
+            dvc_file_path = os.path.join(tmpdir, "model.pt.dvc")
+            with open(dvc_file_path, "w") as f:
+                f.write("outs:\n  - md5: abc123def456\n    path: model.pt\n")
+
             with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
                 with patch("nubison_model.Storage.ensure_dvc_ready"):
                     with patch("nubison_model.Storage.subprocess.run") as mock_run:
@@ -268,6 +273,11 @@ class TestPullFromDvc:
         with tempfile.TemporaryDirectory() as tmpdir:
             dvc_files = {"model.pt": "abc123"}
 
+            # Create .dvc file
+            dvc_file_path = os.path.join(tmpdir, "model.pt.dvc")
+            with open(dvc_file_path, "w") as f:
+                f.write("outs:\n  - md5: abc123\n    path: model.pt\n")
+
             with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
                 with patch("nubison_model.Storage.ensure_dvc_ready"):
                     with patch("nubison_model.Storage.subprocess.run") as mock_run:
@@ -277,6 +287,15 @@ class TestPullFromDvc:
 
                         with pytest.raises(DVCPullError, match="dvc pull failed"):
                             pull_from_dvc(dvc_files, tmpdir)
+
+    def test_pull_missing_dvc_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dvc_files = {"model.pt": "abc123"}
+
+            with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
+                with patch("nubison_model.Storage.ensure_dvc_ready"):
+                    with pytest.raises(DVCPullError, match="DVC file not found"):
+                        pull_from_dvc(dvc_files, tmpdir)
 
     def test_pull_missing_remote_url(self):
         with temporary_env({"DVC_REMOTE_URL": ""}):

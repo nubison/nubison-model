@@ -211,9 +211,16 @@ def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
 
     logger.info(f"DVC: Restoring {len(dvc_info)} file(s) from remote storage...")
 
+    # MLflow stores artifacts in model_root/artifacts/ directory
+    artifacts_dir = os.path.join(model_root, "artifacts")
+    if not os.path.isdir(artifacts_dir):
+        artifacts_dir = model_root  # Fallback if artifacts/ doesn't exist
+
     try:
-        pull_from_dvc(dvc_info, model_root, show_progress=True)
-        _create_dvc_symlinks(dvc_info, model_root)
+        # Run DVC commands from artifacts_dir where .dvc files are located
+        with temporary_cwd(artifacts_dir):
+            pull_from_dvc(dvc_info, ".", show_progress=True)
+        _create_dvc_symlinks(dvc_info, artifacts_dir)
         logger.info("DVC: Files restored successfully")
     except DVCPullError as e:
         logger.error(f"Failed to restore DVC files: {e}")
