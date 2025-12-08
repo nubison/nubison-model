@@ -24,7 +24,6 @@ from nubison_model.Model import (
 )
 from nubison_model.Storage import (
     DVC_FILES_TAG_KEY,
-    ChecksumMismatchError,
     DVCPullError,
     deserialize_dvc_info,
     get_dvc_cache_key,
@@ -213,10 +212,10 @@ def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
     logger.info(f"DVC: Restoring {len(dvc_info)} file(s) from remote storage...")
 
     try:
-        pull_from_dvc(dvc_info, model_root, verify_checksum=True, show_progress=True)
+        pull_from_dvc(dvc_info, model_root, show_progress=True)
         _create_dvc_symlinks(dvc_info, model_root)
         logger.info("DVC: Files restored successfully")
-    except (DVCPullError, ChecksumMismatchError) as e:
+    except DVCPullError as e:
         logger.error(f"Failed to restore DVC files: {e}")
         raise
     except Exception as e:

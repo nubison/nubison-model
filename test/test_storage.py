@@ -1,7 +1,5 @@
 """Unit tests for artifact storage utilities."""
 
-import hashlib
-import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -10,15 +8,12 @@ import pytest
 
 from nubison_model.Storage import (
     DEFAULT_SIZE_THRESHOLD,
-    ChecksumMismatchError,
     DVCError,
     DVCPullError,
     DVCPushError,
-    calculate_file_md5,
     deserialize_dvc_info,
     find_weight_files,
     get_dvc_cache_key,
-    get_dvc_remote_path,
     get_size_threshold,
     is_dvc_enabled,
     is_weight_file,
@@ -27,7 +22,6 @@ from nubison_model.Storage import (
     push_to_dvc,
     serialize_dvc_info,
     should_use_dvc,
-    verify_file_checksum,
 )
 from test.utils import temporary_env
 
@@ -157,34 +151,6 @@ class TestParseDvcFile:
         assert result is None
 
 
-class TestChecksumFunctions:
-    """Tests for checksum related functions."""
-
-    def test_calculate_and_verify_md5(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            content = b"test content for md5"
-            f.write(content)
-            f.flush()
-            try:
-                result = calculate_file_md5(f.name)
-                expected = hashlib.md5(content).hexdigest()
-                assert result == expected
-                assert verify_file_checksum(f.name, expected) is True
-                assert verify_file_checksum(f.name, "wrong_hash") is False
-            finally:
-                os.unlink(f.name)
-
-
-class TestGetDvcRemotePath:
-    """Tests for get_dvc_remote_path function."""
-
-    def test_s3_path(self):
-        result = get_dvc_remote_path(
-            "s3://bucket/dvc-storage", "a304afb96060aad90176268345e10355"
-        )
-        assert result == "s3://bucket/dvc-storage/files/md5/a3/04afb96060aad90176268345e10355"
-
-
 class TestSerializeDeserializeDvcInfo:
     """Tests for serialize/deserialize DVC info functions."""
 
@@ -218,7 +184,6 @@ class TestDvcExceptions:
     def test_dvc_error_hierarchy(self):
         assert issubclass(DVCPushError, DVCError)
         assert issubclass(DVCPullError, DVCError)
-        assert issubclass(ChecksumMismatchError, DVCError)
 
 
 class TestPushToDvc:
@@ -280,102 +245,40 @@ class TestPushToDvc:
 
 
 class TestPullFromDvc:
-    """Tests for pull_from_dvc function with mocked downloads."""
+    """Tests for pull_from_dvc function using dvc pull command."""
 
     def test_pull_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            dvc_files = {"models/model.pt": "abc123def456"}
+            dvc_files = {"model.pt": "abc123def456"}
 
-            with temporary_env({
-                "DVC_REMOTE_URL": "s3://bucket/dvc",
-                "AWS_ACCESS_KEY_ID": "test-key",
-                "AWS_SECRET_ACCESS_KEY": "test-secret",
-            }):
-                with patch("nubison_model.Storage._download_from_remote") as mock_download:
-                    # Mock successful download
-                    def create_file(remote, local, show_progress=True):
-                        os.makedirs(os.path.dirname(local), exist_ok=True)
-                        with open(local, "wb") as f:
-                            f.write(b"model content")
+            with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
+                with patch("nubison_model.Storage.ensure_dvc_ready"):
+                    with patch("nubison_model.Storage.subprocess.run") as mock_run:
+                        mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-                    mock_download.side_effect = create_file
-
-                    with patch("nubison_model.Storage.verify_file_checksum", return_value=True):
                         pull_from_dvc(dvc_files, tmpdir)
 
-                    # Verify file was "downloaded"
-                    assert os.path.exists(os.path.join(tmpdir, "models/model.pt"))
+                        # Verify dvc pull was called
+                        mock_run.assert_called_once()
+                        call_args = mock_run.call_args[0][0]
+                        assert call_args[0:2] == ["dvc", "pull"]
+                        assert "-j" in call_args
 
-    def test_pull_checksum_mismatch(self):
+    def test_pull_dvc_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            dvc_files = {"model.pt": "expected_hash"}
+            dvc_files = {"model.pt": "abc123"}
 
-            with temporary_env({
-                "DVC_REMOTE_URL": "s3://bucket/dvc",
-                "AWS_ACCESS_KEY_ID": "test-key",
-                "AWS_SECRET_ACCESS_KEY": "test-secret",
-            }):
-                with patch("nubison_model.Storage._download_from_remote") as mock_download:
-                    def create_file(remote, local, show_progress=True):
-                        with open(local, "wb") as f:
-                            f.write(b"corrupted content")
+            with temporary_env({"DVC_REMOTE_URL": "s3://bucket/dvc"}):
+                with patch("nubison_model.Storage.ensure_dvc_ready"):
+                    with patch("nubison_model.Storage.subprocess.run") as mock_run:
+                        mock_run.return_value = MagicMock(
+                            returncode=1, stderr="pull failed"
+                        )
 
-                    mock_download.side_effect = create_file
-
-                    with patch("nubison_model.Storage.verify_file_checksum", return_value=False):
-                        with pytest.raises(ChecksumMismatchError):
+                        with pytest.raises(DVCPullError, match="dvc pull failed"):
                             pull_from_dvc(dvc_files, tmpdir)
 
     def test_pull_missing_remote_url(self):
         with temporary_env({"DVC_REMOTE_URL": ""}):
             with pytest.raises(DVCPullError, match="DVC_REMOTE_URL"):
                 pull_from_dvc({"model.pt": "hash"}, ".")
-
-
-class TestDownloadFromS3:
-    """Tests for _download_from_s3 with mocked boto3."""
-
-    def test_download_with_boto3(self):
-        import sys
-        from nubison_model.Storage import _download_from_s3
-
-        # Create mock boto3 module with all required submodules
-        mock_boto3 = MagicMock()
-        mock_s3 = MagicMock()
-        mock_boto3.client.return_value = mock_s3
-        mock_s3.head_object.return_value = {"ContentLength": 1024}
-
-        # Mock boto3.s3.transfer.TransferConfig
-        mock_transfer = MagicMock()
-        mock_boto3.s3 = MagicMock()
-        mock_boto3.s3.transfer = mock_transfer
-
-        with patch.dict(sys.modules, {
-            "boto3": mock_boto3,
-            "boto3.s3": mock_boto3.s3,
-            "boto3.s3.transfer": mock_transfer,
-            "botocore": MagicMock(),
-            "botocore.exceptions": MagicMock()
-        }):
-            with tempfile.NamedTemporaryFile(delete=False) as f:
-                try:
-                    _download_from_s3("s3://bucket/key/file.pt", f.name, show_progress=True)
-                    mock_s3.download_file.assert_called_once()
-                finally:
-                    os.unlink(f.name)
-
-    def test_download_fallback_to_aws_cli(self):
-        import sys
-        from nubison_model.Storage import _download_from_s3
-
-        # Remove boto3 from modules to trigger ImportError
-        with patch.dict(sys.modules, {"boto3": None}):
-            with patch("nubison_model.Storage.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0)
-
-                with tempfile.NamedTemporaryFile(delete=False) as f:
-                    try:
-                        _download_from_s3("s3://bucket/file.pt", f.name)
-                        mock_run.assert_called()
-                    finally:
-                        os.unlink(f.name)

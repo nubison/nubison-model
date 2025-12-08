@@ -438,7 +438,7 @@ def test_restore_dvc_files_success():
         _restore_dvc_files(dvc_info, "/model/root")
 
         mock_pull.assert_called_once_with(
-            dvc_info, "/model/root", verify_checksum=True, show_progress=True
+            dvc_info, "/model/root", show_progress=True
         )
 
 

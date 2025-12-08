@@ -4,21 +4,13 @@ import hashlib
 import json
 import logging
 import subprocess
-import time
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import wraps
 from os import cpu_count, getenv, makedirs, path, walk
-from typing import Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Dict, List, Optional
 
-import boto3
 import yaml
-from boto3.s3.transfer import TransferConfig
 from dvc.repo import Repo
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 ENV_VAR_DVC_ENABLED = "DVC_ENABLED"
 ENV_VAR_DVC_REMOTE_URL = "DVC_REMOTE_URL"
@@ -28,9 +20,6 @@ ENV_VAR_DVC_FILE_EXTENSIONS = "DVC_FILE_EXTENSIONS"
 ENV_VAR_AWS_ENDPOINT_URL = "AWS_ENDPOINT_URL"
 
 DEFAULT_SIZE_THRESHOLD = 100 * 1024 * 1024
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_DELAY = 1.0
-DEFAULT_RETRY_BACKOFF = 2.0
 
 WEIGHT_FILE_EXTENSIONS = {
     ".pt",
@@ -66,12 +55,6 @@ class DVCPushError(DVCError):
 
 class DVCPullError(DVCError):
     """Exception raised when DVC pull fails."""
-
-    pass
-
-
-class ChecksumMismatchError(DVCError):
-    """Exception raised when file checksum doesn't match expected value."""
 
     pass
 
@@ -133,7 +116,9 @@ def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) ->
     """Ensure DVC remote is configured from environment variable."""
     remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
     if not remote_url:
-        raise DVCPushError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set.")
+        raise DVCPushError(
+            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set."
+        )
 
     logger.info(f"DVC: Configuring remote '{remote_name}' -> {remote_url}")
     result = _run_dvc_command(
@@ -147,7 +132,9 @@ def _ensure_dvc_remote_configured(remote_name: str = DVC_DEFAULT_REMOTE_NAME) ->
             _set_remote_option(remote_name, "url", remote_url)
             logger.info(f"DVC: Remote '{remote_name}' updated")
         else:
-            raise DVCPushError(f"Failed to add DVC remote '{remote_name}': {result.stderr}")
+            raise DVCPushError(
+                f"Failed to add DVC remote '{remote_name}': {result.stderr}"
+            )
     else:
         logger.info(f"DVC: Remote '{remote_name}' configured successfully")
 
@@ -182,44 +169,6 @@ def validate_safe_path(base_dir: str, file_path: str) -> str:
         )
 
     return abs_path
-
-
-def retry_with_backoff(
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    initial_delay: float = DEFAULT_RETRY_DELAY,
-    backoff_multiplier: float = DEFAULT_RETRY_BACKOFF,
-    exceptions: Tuple[type, ...] = (Exception,),
-):
-    """Decorator that retries a function with exponential backoff."""
-
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            delay = initial_delay
-            last_exception = None
-
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_exception = e
-                    if attempt < max_retries:
-                        logger.warning(
-                            f"Attempt {attempt + 1}/{max_retries + 1} failed for {func.__name__}: {e}. "
-                            f"Retrying in {delay:.1f}s..."
-                        )
-                        time.sleep(delay)
-                        delay *= backoff_multiplier
-                    else:
-                        logger.error(
-                            f"All {max_retries + 1} attempts failed for {func.__name__}: {e}"
-                        )
-
-            raise last_exception  # type: ignore
-
-        return wrapper
-
-    return decorator
 
 
 def is_dvc_enabled() -> bool:
@@ -325,21 +274,6 @@ def parse_dvc_file(dvc_file_path: str) -> Optional[str]:
     return outs[0].get("md5")
 
 
-def calculate_file_md5(file_path: str) -> str:
-    """Calculate MD5 hash of a file."""
-    md5_hash = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            md5_hash.update(chunk)
-    return md5_hash.hexdigest()
-
-
-def verify_file_checksum(file_path: str, expected_md5: str) -> bool:
-    """Verify file integrity by comparing MD5 checksums."""
-    actual_md5 = calculate_file_md5(file_path)
-    return actual_md5 == expected_md5
-
-
 def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]:
     """Add files to DVC and push to remote. Returns dict mapping paths to md5 hashes."""
     ensure_dvc_ready()
@@ -349,14 +283,12 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     except Exception as e:
         raise DVCPushError(f"Failed to open DVC repository: {e}")
 
-    # Batch add all files at once for better performance
     try:
         repo.add(file_paths)
         logger.info(f"DVC: Added {len(file_paths)} file(s)")
     except Exception as e:
         raise DVCPushError(f"dvc add failed: {e}")
 
-    # Parse .dvc files to extract md5 hashes
     dvc_info = {}
     failed_files = []
 
@@ -377,7 +309,6 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     if failed_files:
         raise DVCPushError(f"DVC add failed for files: {failed_files}")
 
-    # Push all files to remote
     if dvc_info:
         try:
             dvc_files = [f"{fp}.dvc" for fp in dvc_info.keys()]
@@ -389,128 +320,48 @@ def push_to_dvc(file_paths: List[str], fail_fast: bool = True) -> Dict[str, str]
     return dvc_info
 
 
-def get_dvc_remote_path(remote_url: str, md5: str) -> str:
-    """Get DVC remote path: {remote}/files/md5/{hash[:2]}/{hash[2:]}"""
-    return f"{remote_url.rstrip('/')}/files/md5/{md5[:2]}/{md5[2:]}"
-
-
 def pull_from_dvc(
     dvc_files: Dict[str, str],
     local_base_dir: str = ".",
-    verify_checksum: bool = True,
     show_progress: bool = True,
 ) -> None:
-    """Download files from DVC remote storage using md5 hashes with parallel downloads."""
-    remote_url = getenv(ENV_VAR_DVC_REMOTE_URL)
-    if not remote_url:
-        raise DVCPullError(f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set.")
+    """Download files from DVC remote using dvc pull command."""
+    if not getenv(ENV_VAR_DVC_REMOTE_URL):
+        raise DVCPullError(
+            f"{ENV_VAR_DVC_REMOTE_URL} environment variable must be set."
+        )
 
-    total_files = len(dvc_files)
-    workers = int(getenv(ENV_VAR_DVC_JOBS) or max(1, (cpu_count() or 4)))
+    ensure_dvc_ready()
 
-    def download_single(item: Tuple[str, str]) -> str:
-        file_path, md5 = item
+    jobs = getenv(ENV_VAR_DVC_JOBS) or str(cpu_count() or 4)
+    dvc_file_paths = []
+
+    for file_path, md5 in dvc_files.items():
         local_path = validate_safe_path(local_base_dir, file_path)
-        remote_path = get_dvc_remote_path(remote_url, md5)
         makedirs(path.dirname(local_path) or ".", exist_ok=True)
-        _download_from_remote(remote_path, local_path, show_progress=False)
-        if verify_checksum and not verify_file_checksum(local_path, md5):
-            raise ChecksumMismatchError(f"Checksum mismatch for {file_path}: expected {md5}")
-        return file_path
+
+        dvc_file_path = f"{local_path}.dvc"
+        dvc_content = {"outs": [{"md5": md5, "path": path.basename(file_path)}]}
+        with open(dvc_file_path, "w") as f:
+            yaml.dump(dvc_content, f)
+        dvc_file_paths.append(dvc_file_path)
 
     if show_progress:
-        logger.info(f"DVC: Downloading {total_files} file(s) with {workers} workers...")
+        logger.info(
+            f"DVC: Pulling {len(dvc_file_paths)} file(s) with {jobs} workers..."
+        )
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(download_single, item): item[0] for item in dvc_files.items()}
-        for future in as_completed(futures):
-            file_path = futures[future]
-            future.result()  # Raises exception if download failed
-            if show_progress:
-                logger.info(f"DVC: Downloaded {file_path}")
-
-
-def _get_downloader(remote_path: str):
-    """Get appropriate downloader function based on URL scheme."""
-    schemes = [
-        ("s3://", _download_from_s3, True),
-        ("http://", _download_from_http, True),
-        ("https://", _download_from_http, True),
-    ]
-    for scheme, downloader, supports_progress in schemes:
-        if remote_path.startswith(scheme):
-            return downloader, supports_progress
-    return _download_with_dvc, False
-
-
-def _download_from_remote(
-    remote_path: str, local_path: str, show_progress: bool = True
-) -> None:
-    """Download a file from remote storage (S3, HTTP, or DVC fallback)."""
-    downloader, supports_progress = _get_downloader(remote_path)
-    if supports_progress:
-        downloader(remote_path, local_path, show_progress)
-    else:
-        downloader(remote_path, local_path)
-
-
-def _parse_s3_url(url: str) -> Tuple[str, str]:
-    """Parse S3 URL into bucket and key."""
-    parts = url[5:].split("/", 1)
-    return parts[0], parts[1] if len(parts) > 1 else ""
-
-
-@retry_with_backoff(max_retries=DEFAULT_MAX_RETRIES, exceptions=(Exception,))
-def _download_from_s3(
-    remote_path: str, local_path: str, show_progress: bool = True
-) -> None:
-    """Download file from S3 with multipart download."""
-    endpoint_url = getenv(ENV_VAR_AWS_ENDPOINT_URL)
-    bucket, key = _parse_s3_url(remote_path)
-    s3 = boto3.client("s3", endpoint_url=endpoint_url) if endpoint_url else boto3.client("s3")
-
-    if show_progress:
-        try:
-            size = s3.head_object(Bucket=bucket, Key=key).get("ContentLength", 0)
-            logger.info(f"  Size: {size / (1024*1024):.1f} MB")
-        except Exception:
-            pass
-
-    config = TransferConfig(
-        multipart_threshold=8 * 1024 * 1024,
-        max_concurrency=10,
-        multipart_chunksize=8 * 1024 * 1024,
-    )
-    s3.download_file(bucket, key, local_path, Config=config)
-
-
-@retry_with_backoff(max_retries=DEFAULT_MAX_RETRIES, exceptions=(Exception,))
-def _download_from_http(
-    remote_path: str, local_path: str, show_progress: bool = True
-) -> None:
-    """Download file from HTTP(S) URL with retry logic."""
-    if show_progress:
-        try:
-            with urllib.request.urlopen(remote_path) as response:
-                file_size = int(response.headers.get("Content-Length", 0))
-                if file_size:
-                    logger.info(f"  Size: {file_size / (1024*1024):.1f} MB")
-        except Exception:
-            pass
-
-    urllib.request.urlretrieve(remote_path, local_path)
-
-
-@retry_with_backoff(max_retries=DEFAULT_MAX_RETRIES, exceptions=(subprocess.CalledProcessError,))
-def _download_with_dvc(remote_path: str, local_path: str) -> None:
-    """Fallback: use DVC to download."""
     result = subprocess.run(
-        ["dvc", "get-url", remote_path, local_path],
+        ["dvc", "pull", "-j", jobs] + dvc_file_paths,
         capture_output=True,
         text=True,
     )
+
     if result.returncode != 0:
-        raise DVCPullError(f"DVC get-url failed: {result.stderr}")
+        raise DVCPullError(f"dvc pull failed: {result.stderr}")
+
+    if show_progress:
+        logger.info("DVC: Pull completed successfully")
 
 
 def serialize_dvc_info(dvc_info: Dict[str, str]) -> str:
