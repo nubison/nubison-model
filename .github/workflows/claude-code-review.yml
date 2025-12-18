@@ -1,0 +1,73 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+
+jobs:
+  claude-review:
+    # Optional: Filter by PR author
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.user.login == 'new-developer' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            ## 리뷰 지침
+
+            **언어**: 모든 리뷰 코멘트는 한국어로 작성합니다.
+
+            **컨텍스트 파악 필수**:
+            1. `gh pr view`로 PR 설명을 먼저 읽습니다
+            2. 관련 이슈가 있다면 `gh issue view`로 이슈 내용을 확인합니다
+            3. PR의 의도와 범위를 파악한 후 그에 맞는 리뷰를 진행합니다
+
+            **범위에 맞는 리뷰**:
+            - 빠른 기능 검토용 PR → 과도한 리팩토링/보안 지적 지양
+            - 프로덕션 배포용 PR → 보안, 성능, 테스트 커버리지 중점 검토
+            - 리팩토링 PR → 코드 품질, 일관성 중점 검토
+
+            ## 리뷰 항목
+
+            PR 목적에 적합한 항목을 선택하여 피드백:
+            - Code quality and best practices
+            - Potential bugs or issues
+            - Performance considerations
+            - Security concerns
+            - Test coverage
+
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+
+            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+
