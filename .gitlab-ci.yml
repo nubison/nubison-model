@@ -1,0 +1,26 @@
+stages:
+  - sync
+
+sync-from-github:
+  stage: sync
+  tags:
+    - Shared Runner
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - git clone --mirror https://${GITHUB_PAT}@github.com/nubison/nubison-model.git /tmp/mirror
+    - cd /tmp/mirror
+    - git remote add gitlab https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/mlops/nubison-model.git
+    - git push --force --prune gitlab "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+
+sync-to-github:
+  stage: sync
+  tags:
+    - Shared Runner
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+  script:
+    - git clone --mirror https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/mlops/nubison-model.git /tmp/mirror
+    - cd /tmp/mirror
+    - git remote add github https://${GITHUB_PAT}@github.com/nubison/nubison-model.git
+    - git push --force --prune github "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
