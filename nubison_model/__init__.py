@@ -11,14 +11,34 @@ from .Model import (
     register,
 )
 from .Service import build_inference_service, test_client
+from .Storage import (
+    ENV_VAR_AWS_ENDPOINT_URL,
+    ENV_VAR_DVC_ENABLED,
+    ENV_VAR_DVC_REMOTE_URL,
+    ENV_VAR_DVC_SIZE_THRESHOLD,
+    DVCError,
+    DVCPullError,
+    DVCPushError,
+    ensure_dvc_ready,
+    is_dvc_enabled,
+)
 
 __all__ = [
     "ENV_VAR_MLFLOW_MODEL_URI",
     "ENV_VAR_MLFLOW_TRACKING_URI",
+    "ENV_VAR_DVC_ENABLED",
+    "ENV_VAR_DVC_REMOTE_URL",
+    "ENV_VAR_DVC_SIZE_THRESHOLD",
+    "ENV_VAR_AWS_ENDPOINT_URL",
     "ModelContext",
     "NubisonModel",
     "NubisonMLFlowModel",
     "register",
     "build_inference_service",
     "test_client",
+    "is_dvc_enabled",
+    "ensure_dvc_ready",
+    "DVCError",
+    "DVCPushError",
+    "DVCPullError",
 ]

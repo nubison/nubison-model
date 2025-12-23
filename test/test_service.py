@@ -252,11 +252,14 @@ def test_load_nubison_mlflow_model_single_worker():
                     "nubison_model.Service.load_model",
                     return_value=MockMLflowModel(model_path),
                 ):
-                    result = load_nubison_mlflow_model("http://test", "model_uri")
+                    model_uri = "model_uri"
+                    result = load_nubison_mlflow_model("http://test", model_uri)
                     assert isinstance(result, NubisonMLFlowModel)
 
-                    # Verify path file was created
-                    path_file = os.path.join(temp_dir, "shared") + ".path"
+                    # Verify path file was created (now includes model cache key)
+                    from nubison_model.Service import _get_model_cache_key
+                    model_cache_key = _get_model_cache_key(model_uri)
+                    path_file = os.path.join(temp_dir, "shared") + f".path_{model_cache_key}"
                     assert os.path.exists(path_file)
                     with open(path_file, "r") as f:
                         cached_path = f.read().strip()
@@ -265,6 +268,7 @@ def test_load_nubison_mlflow_model_single_worker():
 
 def test_corrupted_cache_file_handling():
     """Test handling of corrupted or invalid cache files."""
+    from nubison_model.Service import _get_model_cache_key
 
     class MockNubisonModel:
         def infer(self, test: str):
@@ -281,7 +285,12 @@ def test_corrupted_cache_file_handling():
 
     with tempfile.TemporaryDirectory() as temp_dir:
         shared_dir = os.path.join(temp_dir, "shared")
-        path_file = shared_dir + ".path"
+        model_uri = "model_uri"
+        model_cache_key = _get_model_cache_key(model_uri)
+        path_file = f"{shared_dir}.path_{model_cache_key}"
+
+        # Ensure parent directory exists for path_file
+        os.makedirs(os.path.dirname(path_file), exist_ok=True)
 
         # Test 1: Cache file points to non-existent path
         with open(path_file, "w") as f:
@@ -295,16 +304,16 @@ def test_corrupted_cache_file_handling():
                 side_effect=mock_load_model_wrapper,
             ) as mock_wrapper:
                 # First call should try cached path and fail, then fallback to original URI
-                def side_effect_cached_failure(tracking_uri, model_uri):
-                    if model_uri == "/non/existent/path":
+                def side_effect_cached_failure(tracking_uri, uri):
+                    if uri == "/non/existent/path":
                         raise FileNotFoundError("Model file not found")
-                    return mock_load_model_wrapper(tracking_uri, model_uri)
+                    return mock_load_model_wrapper(tracking_uri, uri)
 
                 mock_wrapper.side_effect = side_effect_cached_failure
 
                 # Should handle the cached path failure and fallback to original URI
                 with pytest.raises(FileNotFoundError):
-                    load_nubison_mlflow_model("http://test", "model_uri")
+                    load_nubison_mlflow_model("http://test", model_uri)
 
         # Test 2: Empty cache file
         fallback_calls.clear()
@@ -319,15 +328,15 @@ def test_corrupted_cache_file_handling():
                 side_effect=mock_load_model_wrapper,
             ) as mock_wrapper:
 
-                def side_effect_empty_path(tracking_uri, model_uri):
-                    if model_uri == "":
+                def side_effect_empty_path(tracking_uri, uri):
+                    if uri == "":
                         raise ValueError("Empty model path")
-                    return mock_load_model_wrapper(tracking_uri, model_uri)
+                    return mock_load_model_wrapper(tracking_uri, uri)
 
                 mock_wrapper.side_effect = side_effect_empty_path
 
                 with pytest.raises(ValueError):
-                    load_nubison_mlflow_model("http://test", "model_uri")
+                    load_nubison_mlflow_model("http://test", model_uri)
 
 
 def test_download_exception_cleanup():
@@ -395,6 +404,74 @@ def test_download_exception_cleanup():
 
                         # Verify no partial cache file was created
                         assert not os.path.exists(path_file)
+
+
+def test_request_timeout_default_allows_slow_request():
+    """Test that default REQUEST_TIMEOUT (60s) allows slow requests to complete."""
+    import time
+
+    class SlowModel:
+        def infer(self):
+            time.sleep(2)  # 2 second delay, well within default 60s timeout
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(SlowModel())
+
+        # Ensure REQUEST_TIMEOUT is not set (use default 60s)
+        env_without_timeout = {k: v for k, v in os.environ.items() if k != "REQUEST_TIMEOUT"}
+        with patch.dict(os.environ, env_without_timeout, clear=True):
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should succeed with default 60s timeout
+                assert response.status_code == 200
+                assert response.text == "done"
+
+
+def test_request_timeout_causes_504():
+    """Test that REQUEST_TIMEOUT causes 504 when request exceeds timeout."""
+    import time
+
+    class SlowModel:
+        def infer(self):
+            time.sleep(2)  # 2 second delay, exceeds 1s timeout
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(SlowModel())
+
+        with temporary_env({"REQUEST_TIMEOUT": "1"}):  # 1 second timeout
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should return 504 Gateway Timeout
+                assert response.status_code == 504
+
+
+def test_request_timeout_success_when_fast():
+    """Test that fast responses succeed within REQUEST_TIMEOUT."""
+
+    class FastModel:
+        def infer(self):
+            return "done"
+
+        def load_model(self, context):
+            pass
+
+    with patch("nubison_model.Service.load_nubison_mlflow_model") as mock_load:
+        mock_load.return_value = NubisonMLFlowModel(FastModel())
+
+        with temporary_env({"REQUEST_TIMEOUT": "10"}):  # 10 second timeout
+            with test_client("test") as client:
+                response = client.post("/infer", json={})
+                # Should return 200 OK
+                assert response.status_code == 200
+                assert response.text == "done"
 
 
 # Ignore the test_client from being collected by pytest
