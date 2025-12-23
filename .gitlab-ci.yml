@@ -1,6 +1,10 @@
 stages:
   - sync
 
+variables:
+  GITHUB_REPO: "nubison/nubison-model.git"
+  GITLAB_REPO: "mlops/nubison-model.git"
+
 sync-from-github:
   stage: sync
   tags:
@@ -8,10 +12,24 @@ sync-from-github:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   script:
-    - git clone --mirror https://${GITHUB_PAT}@github.com/nubison/nubison-model.git /tmp/mirror
-    - cd /tmp/mirror
-    - git remote add gitlab https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/mlops/nubison-model.git
-    - git push --force --prune gitlab "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+    - |
+      GITHUB_URL="https://${GITHUB_PAT}@github.com/${GITHUB_REPO}"
+      GITLAB_URL="https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/${GITLAB_REPO}"
+
+      # refs/heads/* 와 refs/tags/* 만 필터링하여 비교 (내부 refs 제외)
+      GITHUB_REFS=$(git ls-remote "$GITHUB_URL" | grep -E '^[a-f0-9]+\s+refs/(heads|tags)/' | sort)
+      GITLAB_REFS=$(git ls-remote "$GITLAB_URL" | grep -E '^[a-f0-9]+\s+refs/(heads|tags)/' | sort)
+
+      if [ "$GITHUB_REFS" = "$GITLAB_REFS" ]; then
+        echo "Repositories are already in sync. Skipping clone/push."
+        exit 0
+      fi
+
+      echo "Differences detected. Syncing..."
+      git clone --mirror "$GITHUB_URL" /tmp/mirror
+      cd /tmp/mirror
+      git remote add gitlab "$GITLAB_URL"
+      git push --force --prune gitlab "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
 
 sync-to-github:
   stage: sync
@@ -20,7 +38,11 @@ sync-to-github:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push"
   script:
-    - git clone --mirror https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/mlops/nubison-model.git /tmp/mirror
-    - cd /tmp/mirror
-    - git remote add github https://${GITHUB_PAT}@github.com/nubison/nubison-model.git
-    - git push --force --prune github "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+    - |
+      GITHUB_URL="https://${GITHUB_PAT}@github.com/${GITHUB_REPO}"
+      GITLAB_URL="https://git-mirror:${GITLAB_PAT}@gitlab.nubison.io/${GITLAB_REPO}"
+
+      git clone --mirror "$GITLAB_URL" /tmp/mirror
+      cd /tmp/mirror
+      git remote add github "$GITHUB_URL"
+      git push --force --prune github "+refs/heads/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
