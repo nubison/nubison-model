@@ -17,7 +17,7 @@ from mlflow.pyfunc import load_model
 from starlette.testclient import TestClient
 
 from nubison_model.Model import (
-    DEAFULT_MLFLOW_URI,
+    DEFAULT_MLFLOW_URI,
     ENV_VAR_MLFLOW_MODEL_URI,
     ENV_VAR_MLFLOW_TRACKING_URI,
     NubisonMLFlowModel,
@@ -173,7 +173,9 @@ def _get_dvc_info_from_model_uri(mlflow_tracking_uri: str, model_uri: str) -> di
         return {}
 
 
-def _cleanup_old_dvc_done_files(shared_info_dir: str, current_dvc_done_file: str) -> None:
+def _cleanup_old_dvc_done_files(
+    shared_info_dir: str, current_dvc_done_file: str
+) -> None:
     """Clean up old DVC done files from previous model versions."""
     pattern = shared_info_dir + ".dvc_done_*"
     for old_file in glob.glob(pattern):
@@ -204,7 +206,7 @@ def _create_dvc_symlinks(dvc_info: dict, model_root: str) -> None:
             logger.error(f"Error creating symlink for {file_path}: {e}")
 
 
-def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
+def _restore_dvc_files(dvc_info: dict, model_root: str, model_uri: str = "") -> None:
     """Restore DVC-tracked files to the model directory and create symlinks."""
     if not dvc_info:
         return
@@ -223,11 +225,11 @@ def _restore_dvc_files(dvc_info: dict, model_root: str) -> None:
         _create_dvc_symlinks(dvc_info, artifacts_dir)
         logger.info("DVC: Files restored successfully")
     except DVCPullError as e:
-        logger.error(f"Failed to restore DVC files: {e}")
+        logger.error(f"Failed to restore DVC files for {model_uri}: {e}")
         raise
     except Exception as e:
-        logger.error(f"Unexpected error restoring DVC files: {e}")
-        raise DVCPullError(f"Failed to restore DVC files: {e}") from e
+        logger.error(f"Unexpected error restoring DVC files for {model_uri}: {e}")
+        raise DVCPullError(f"Failed to restore DVC files for {model_uri}: {e}") from e
 
 
 def _get_model_root(path_file: str) -> str:
@@ -245,14 +247,18 @@ def _mark_dvc_done(dvc_done_file: str, model_uri: str) -> None:
 
 
 def _handle_dvc_restoration(
-    dvc_info: dict, dvc_done_file: str, shared_info_dir: str, path_file: str, model_uri: str
+    dvc_info: dict,
+    dvc_done_file: str,
+    shared_info_dir: str,
+    path_file: str,
+    model_uri: str,
 ) -> None:
     """Handle DVC file restoration if needed."""
     if not dvc_info or not dvc_done_file or os.path.exists(dvc_done_file):
         return
 
     _cleanup_old_dvc_done_files(shared_info_dir, dvc_done_file)
-    _restore_dvc_files(dvc_info, _get_model_root(path_file))
+    _restore_dvc_files(dvc_info, _get_model_root(path_file), model_uri)
     _mark_dvc_done(dvc_done_file, model_uri)
 
 
@@ -281,9 +287,15 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
     lock_file = f"{shared_info_dir}.lock_{model_cache_key}"
     path_file = f"{shared_info_dir}.path_{model_cache_key}"
 
-    dvc_info = _get_dvc_info_from_model_uri(mlflow_tracking_uri, mlflow_model_uri) if is_dvc_enabled() else {}
+    dvc_info = (
+        _get_dvc_info_from_model_uri(mlflow_tracking_uri, mlflow_model_uri)
+        if is_dvc_enabled()
+        else {}
+    )
     dvc_cache_key = get_dvc_cache_key(mlflow_model_uri, dvc_info) if dvc_info else ""
-    dvc_done_file = f"{shared_info_dir}.dvc_done_{dvc_cache_key}" if dvc_cache_key else ""
+    dvc_done_file = (
+        f"{shared_info_dir}.dvc_done_{dvc_cache_key}" if dvc_cache_key else ""
+    )
 
     needs_dvc = bool(dvc_info and dvc_done_file and not os.path.exists(dvc_done_file))
 
@@ -293,8 +305,12 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
 
     try:
         with FileLock(lock_file, timeout=300):
-            needs_dvc = bool(dvc_info and dvc_done_file and not os.path.exists(dvc_done_file))
-            cached_model = _load_cached_model_if_available(mlflow_tracking_uri, path_file)
+            needs_dvc = bool(
+                dvc_info and dvc_done_file and not os.path.exists(dvc_done_file)
+            )
+            cached_model = _load_cached_model_if_available(
+                mlflow_tracking_uri, path_file
+            )
             if cached_model and not needs_dvc:
                 return cached_model
 
@@ -302,13 +318,17 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
                 mlflow_tracking_uri, mlflow_model_uri
             )
             _extract_and_cache_model_path(mlflow_model, path_file)
-            _handle_dvc_restoration(dvc_info, dvc_done_file, shared_info_dir, path_file, mlflow_model_uri)
+            _handle_dvc_restoration(
+                dvc_info, dvc_done_file, shared_info_dir, path_file, mlflow_model_uri
+            )
 
             return nubison_model
 
     except Timeout:
         logger.warning("Lock timeout, falling back to direct load")
-        _, nubison_model = _load_model_with_nubison_wrapper(mlflow_tracking_uri, mlflow_model_uri)
+        _, nubison_model = _load_model_with_nubison_wrapper(
+            mlflow_tracking_uri, mlflow_model_uri
+        )
         return nubison_model
 
 
@@ -333,9 +353,7 @@ def build_inference_service(
     mlflow_tracking_uri: Optional[str] = None, mlflow_model_uri: Optional[str] = None
 ):
     mlflow_tracking_uri = (
-        mlflow_tracking_uri
-        or getenv(ENV_VAR_MLFLOW_TRACKING_URI)
-        or DEAFULT_MLFLOW_URI
+        mlflow_tracking_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or DEFAULT_MLFLOW_URI
     )
     mlflow_model_uri = mlflow_model_uri or getenv(ENV_VAR_MLFLOW_MODEL_URI) or ""
 
