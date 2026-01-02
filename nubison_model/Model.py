@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 ENV_VAR_MLFLOW_TRACKING_URI = "MLFLOW_TRACKING_URI"
 ENV_VAR_MLFLOW_MODEL_URI = "MLFLOW_MODEL_URI"
 DEFAULT_MODEL_NAME = "Default"
-DEAFULT_MLFLOW_URI = "http://127.0.0.1:5000"
+DEFAULT_MLFLOW_URI = "http://127.0.0.1:5000"
 DEFAULT_ARTIFACT_DIRS = ""  # Default code paths comma-separated
 
 
@@ -288,7 +288,7 @@ def register(
     if model_name is None:
         model_name = getenv("MODEL_NAME", DEFAULT_MODEL_NAME)
     if mlflow_uri is None:
-        mlflow_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI, DEAFULT_MLFLOW_URI)
+        mlflow_uri = getenv(ENV_VAR_MLFLOW_TRACKING_URI, DEFAULT_MLFLOW_URI)
 
     tags = dict(tags) if tags else {}
 
