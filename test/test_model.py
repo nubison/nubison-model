@@ -1,6 +1,8 @@
 from os import path
 
+import mlflow
 import pytest
+from mlflow.exceptions import RestException
 from mlflow.tracking import MlflowClient
 
 from nubison_model import ModelContext, NubisonModel, register
@@ -165,3 +167,93 @@ def test_register_with_tags(mlflow_server):
         assert (
             model_version.tags[tag_name] == tag_value
         ), f"Tag {tag_name} was not set correctly"
+
+
+def test_register_skip_no_registry_entry(mlflow_server):
+    """When skip_model_registration=True, no Model Registry entry is created."""
+    model_name = "TestSkipNoRegistry"
+
+    class DummyModel(NubisonModel):
+        def load_model(self, context: ModelContext):
+            pass
+
+        def infer(self, input):
+            pass
+
+    register(DummyModel(), model_name=model_name, skip_model_registration=True)
+
+    client = MlflowClient()
+    with pytest.raises(RestException):
+        client.get_registered_model(model_name)
+
+
+def test_register_skip_model_still_packaged(mlflow_server):
+    """With skip=True the model is still packaged as a run artifact."""
+    model_name = "TestSkipPackaged"
+
+    class DummyModel(NubisonModel):
+        def load_model(self, context: ModelContext):
+            pass
+
+        def infer(self, input):
+            return input
+
+    artifact_dirs = ["src_skip_packaged"]
+    with temporary_dirs(artifact_dirs), temporary_env(
+        {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
+    ):
+        run_uri = register(
+            DummyModel(),
+            model_name=model_name,
+            skip_model_registration=True,
+        )
+
+    run_id = get_run_id_from_model_uri(run_uri)
+    client = MlflowClient()
+    artifact_path = client.download_artifacts(run_id, "")
+    for d in artifact_dirs:
+        assert path.exists(path.join(artifact_path, "artifacts", d))
+
+
+def test_register_skip_returns_runs_uri(mlflow_server):
+    """When skip=True the returned URI has a 'runs:/' prefix."""
+
+    class DummyModel(NubisonModel):
+        def load_model(self, context: ModelContext):
+            pass
+
+        def infer(self, input):
+            pass
+
+    uri = register(
+        DummyModel(),
+        model_name="TestSkipURI",
+        skip_model_registration=True,
+    )
+    assert uri.startswith("runs:/"), f"Expected 'runs:/' prefix, got: {uri}"
+
+
+def test_register_skip_then_register_via_mlflow_api(mlflow_server):
+    """The returned runs:/ URI can be registered via mlflow.register_model()."""
+    model_name = "TestSkipThenRegister"
+
+    class DummyModel(NubisonModel):
+        def load_model(self, context: ModelContext):
+            pass
+
+        def infer(self, input):
+            pass
+
+    run_uri = register(
+        DummyModel(),
+        model_name=model_name,
+        skip_model_registration=True,
+    )
+
+    mlflow.register_model(run_uri, model_name)
+
+    client = MlflowClient()
+    registered = client.get_registered_model(model_name)
+    assert registered.name == model_name
+
+    client.delete_registered_model(model_name)
