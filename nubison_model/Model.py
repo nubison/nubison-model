@@ -251,6 +251,7 @@ def register(
     params: Optional[dict[str, Any]] = None,
     metrics: Optional[dict[str, float]] = None,
     tags: Optional[dict[str, str]] = None,
+    skip_model_registration: bool = False,
 ):
     """Register a model with MLflow.
 
@@ -266,10 +267,18 @@ def register(
         artifact_dirs: Comma-separated list of directories to include as artifacts
         params: Optional dictionary of parameters to log
         metrics: Optional dictionary of metrics to log
-        tags: Optional dictionary of tags to log with the model registration
+        tags: Optional dictionary of tags. Always logged on the MLflow run.
+            When skip_model_registration is False, also applied to the Model
+            Registry version (via MlflowClient.set_model_version_tag).
+        skip_model_registration: If True, logs the experiment (params/metrics/tags/
+            artifacts) and packages the model as a run artifact, but skips creating
+            a Model Registry entry. The returned URI has a 'runs:/' prefix and can
+            later be registered via mlflow.register_model(uri, model_name).
+            Default: False (preserves existing behavior).
 
     Returns:
-        str: The URI of the registered model
+        str: The URI of the registered model. When skip_model_registration is False,
+        returns a 'models:/' URI. When True, returns a 'runs:/' URI.
 
     Raises:
         TypeError: If the model doesn't implement the NubisonModel protocol
@@ -329,7 +338,7 @@ def register(
         # Log the model to MLflow
         # Always use folder structure to maintain consistent artifact paths
         model_info: ModelInfo = mlflow.pyfunc.log_model(
-            registered_model_name=model_name,
+            registered_model_name=None if skip_model_registration else model_name,
             python_model=NubisonMLFlowModel(model),
             conda_env=_make_conda_env(),
             artifacts=_make_artifact_dir_dict(artifact_dirs),
@@ -337,7 +346,7 @@ def register(
         )
 
         # Set tags on the registered model version
-        if tags:
+        if tags and not skip_model_registration:
             client = mlflow.tracking.MlflowClient()
             for tag_name, tag_value in tags.items():
                 client.set_model_version_tag(

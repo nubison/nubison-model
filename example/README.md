@@ -62,6 +62,10 @@ The `register` function is used to register the user model with MLflow. It suppo
 - `params`: Optional dictionary of parameters to log with the MLflow run.
 - `metrics`: Optional dictionary of metrics to log with the MLflow run.
 - `tags`: Optional dictionary of tags to log with the model version.
+- `skip_model_registration`: When `True`, logs the experiment and packages the
+  model as a run artifact but skips creating a Model Registry entry. The
+  returned URI uses the `runs:/` prefix and can later be registered via
+  `mlflow.register_model(uri, model_name)`. Default: `False`.
 
 ### ### Test a user model
 
