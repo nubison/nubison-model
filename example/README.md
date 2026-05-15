@@ -15,14 +15,19 @@ service via `register()`.
 
 ```
 example/
-├── train_sklearn.ipynb      # sklearn / xgboost / lightgbm / Keras / skorch
-├── train_pytorch.ipynb      # vanilla PyTorch — `t.log_metric` + `t.save(model)`
-├── model.ipynb              # NubisonModel wrapping weights.pkl → register → test_client
+├── train_sklearn.ipynb       # sklearn / xgboost / lightgbm / Keras / skorch
+├── train_pytorch.ipynb       # vanilla PyTorch — `t.log_metric` + `t.save(model)`
+├── train_lightning.ipynb     # PyTorch Lightning — Trainer.fit + autolog hook
+├── train_transformers.ipynb  # HuggingFace transformers Trainer (small text demo)
+├── model.ipynb               # NubisonModel wrapping weights.pkl → register → test_client
 ├── requirements.txt
 └── src/
-    ├── iris_demo.py         # demo SQL Explorer connection setup
-    └── weights.pkl          # produced by a train_*.ipynb, packaged by model.ipynb
+    ├── iris_demo.py          # demo SQL Explorer connection setup
+    └── weights.pkl           # produced by a train_*.ipynb, packaged by model.ipynb
 ```
+
+Pick the `train_*.ipynb` that matches your framework — all four produce
+the same `src/weights.pkl` interface so `model.ipynb` packages any of them.
 
 ## Order of execution
 
