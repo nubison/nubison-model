@@ -120,7 +120,7 @@ def _best_effort_git_tags() -> Dict[str, str]:
     return tags
 
 
-_RESOLVABLE_SOURCE_SCHEMES = ("s3://", "file://", "http://", "https://", "dbref://")
+_RESOLVABLE_SOURCE_SCHEMES = ("s3://", "file://", "http://", "https://")
 
 
 def _log_dataset_inputs(
