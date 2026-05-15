@@ -1,9 +1,9 @@
 # nubison-model example
 
 End-to-end example showing the **train → register → serve** workflow with
-`nubison-model`. The two notebooks chain together: `train.ipynb` produces
-a fitted estimator at `src/weights.pkl`, and `model.ipynb` packages that
-file as an inference service via `register()`.
+`nubison-model`. The training notebooks produce a fitted estimator at
+`src/weights.pkl`, and `model.ipynb` packages that file as an inference
+service via `register()`.
 
 ## Prerequisites
 
@@ -15,52 +15,62 @@ file as an inference service via `register()`.
 
 ```
 example/
-├── train.ipynb              # data.load → data.split → train → src/weights.pkl
+├── train_sklearn.ipynb      # sklearn / xgboost / lightgbm / Keras / skorch
+├── train_pytorch.ipynb      # vanilla PyTorch — `t.log_metric` + `t.save(model)`
 ├── model.ipynb              # NubisonModel wrapping weights.pkl → register → test_client
 ├── requirements.txt
 └── src/
-    ├── iris_demo.py         # demo helper used by train.ipynb (not shipped)
-    └── weights.pkl          # produced by train.ipynb, packaged by model.ipynb
+    ├── iris_demo.py         # demo SQL Explorer connection setup
+    └── weights.pkl          # produced by a train_*.ipynb, packaged by model.ipynb
 ```
 
 ## Order of execution
 
-1. **`train.ipynb`** — loads the iris dataset (file / S3 / SQL Explorer
-   connection), splits it, calls `train()`. The fitted estimator is
-   pickled to `src/weights.pkl` automatically.
-2. **`model.ipynb`** — defines a `NubisonModel` that loads `src/weights.pkl`
-   in `load_model` and calls `predict` in `infer`. `register()` packages
-   `src/` (including `weights.pkl`) as an MLflow Model Registry entry, and
+1. **Run one of `train_*.ipynb`** — loads the iris dataset, trains a
+   model, pickles it to `src/weights.pkl` (and logs the run + dataset
+   lineage to MLflow). Pick the notebook that matches your framework.
+2. **`model.ipynb`** — defines a `NubisonModel` that loads
+   `src/weights.pkl` in `load_model` and calls `predict` in `infer`.
+   `register()` packages `src/` as a Model Registry entry, and
    `test_client` runs an HTTP smoke test.
 
-You can run `model.ipynb` standalone too — its `UserModel` only depends on
-`src/weights.pkl`. If you haven't run `train.ipynb` yet you'll need to
-provide that file by other means.
+The `model.ipynb` template uses a sklearn-style `predict` for inference;
+for PyTorch models, replace the `infer` body with `model(x)` and an
+`argmax`.
 
 ## API summary
 
-### `train(estimator, datasets, target, ...)`
+### `train(datasets, target, *, weights_path, ...)` — context manager
 
-One-call training entry point. Works for any framework following the
-sklearn `fit(X, y, **kwargs)` interface — sklearn / xgboost / lightgbm /
-keras / fastai, and PyTorch via `skorch` or `pytorch-lightning`.
+Single entry point for every framework. Yields a `TrainContext` with:
 
-Returns the MLflow `run_id`. Side effects:
-- sets tracking URI / experiment, runs `autolog()`
-- starts a run with system metrics
+- `t.X`, `t.y`, `t.X_eval`, `t.y_eval` — DataFrames split out of `datasets`.
+- `t.fit(estimator, **fit_kwargs)` — sklearn-fluent shortcut: runs
+  `estimator.fit(t.X, t.y, ...)`, pickles the model to `weights_path`,
+  and logs `evaluation_score`. Use for sklearn / xgboost / lightgbm /
+  Keras / skorch.
+- `t.log_metric(name, value, step=None)` / `log_params` / `set_tag` —
+  mlflow wrappers. Use inside custom training loops (PyTorch / fastai /
+  transformers / etc.) — no `import mlflow` needed.
+- `t.save(model, weights_path=None)` — pickle + log as run artifact.
+- `t.run_id` — mlflow run id (read after the `with` block).
+
+Side effects of `train()`:
+- sets tracking URI / experiment, enables `mlflow.autolog(log_datasets=False)`
+- starts a run + logs notebook source (with `notebook.hash` tag)
 - logs each `datasets` entry as a separate `log_input` for lineage
-- scores the estimator on non-`"training"` splits (`accuracy` / `r2`)
-- pickles the fitted estimator to `src/weights.pkl`
-- logs any directories listed in `artifact_dirs`
+- forwards `extra_params` / `extra_tags`
+- on exit, mirrors any `artifact_dirs` at the run level
 
 ### `register(NubisonModel(), artifact_dirs="src", ...)`
 
-Packages the inference code as an MLflow `pyfunc` model. The `NubisonModel`
-class must implement:
+Packages the inference code as an MLflow `pyfunc` model. The
+`NubisonModel` class implements:
 - `load_model(self, context: ModelContext)` — runs once at server start
 - `infer(self, ...)` — runs per request, returns JSON-serializable result
 
-`artifact_dirs="src"` ships `src/weights.pkl` so `load_model` can pickle-load it.
+`artifact_dirs="src"` ships `src/weights.pkl` so `load_model` can
+pickle-load it.
 
 ### `test_client(model_id)`
 

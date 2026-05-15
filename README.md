@@ -69,11 +69,16 @@ datasets = data.split(
 
 ### Train a model (no mlflow boilerplate)
 
-`train()` is a one-line sklearn-like API that handles tracking URI,
-experiment selection, `autolog`, `start_run` with system metrics,
-per-dataset `log_input` lineage, notebook source / git tags
-(best-effort), and pickling the fitted estimator to `src/weights.pkl`.
-The user does not touch the mlflow API.
+`train()` is a context manager that opens an MLflow run with autolog,
+per-dataset lineage, system-friendly tags, and yields a `TrainContext`
+exposing ready-to-fit data plus mlflow-wrapped helpers — you never
+`import mlflow`. The same context manager covers every framework.
+
+#### sklearn / xgboost / lightgbm / Keras / skorch
+
+`t.fit(estimator, **fit_kwargs)` runs `estimator.fit(t.X, t.y, ...)`,
+auto-pickles the fitted model to `weights_path`, and logs an
+`evaluation_score` from the `"evaluation"` split if present.
 
 ```python
 from nubison_model import data, train
@@ -82,44 +87,61 @@ from sklearn.linear_model import LogisticRegression
 full = data.load("s3://my-bucket/all.parquet")
 datasets = data.split(full, {"training": 0.8, "evaluation": 0.2}, random_state=42)
 
-run_id = train(
-    estimator=LogisticRegression(max_iter=500),
-    datasets=datasets,
-    target=["target"],
-    model_type="classifier",
-    artifact_dirs="src",
-    extra_params={"feature_version": "v3"},
-    extra_tags={"team": "ds"},
-)
+with train(datasets=datasets, target="target") as t:
+    t.fit(LogisticRegression(max_iter=500))
+
+print("run_id:", t.run_id)
 ```
 
 For frameworks with extra `fit` arguments (xgboost early stopping, Keras
-epochs), use `fit_kwargs`. The magic string `"evaluation"` is resolved
-to `(X_eval, y_eval)` from the matching `datasets` key:
+epochs / validation_data), pass them as kwargs:
 
 ```python
 from xgboost import XGBClassifier
 
-train(
-    estimator=XGBClassifier(n_estimators=500),
-    datasets=datasets,
-    target=["target"],
-    fit_kwargs={"eval_set": "evaluation", "early_stopping_rounds": 20},
-)
+with train(datasets=datasets, target="target") as t:
+    t.fit(
+        XGBClassifier(n_estimators=500),
+        eval_set=[(t.X_eval, t.y_eval)],
+        early_stopping_rounds=20,
+    )
 ```
 
-PyTorch follows the same pattern via a sklearn-compatible wrapper
-(`skorch`, `pytorch-lightning`, `fastai`, etc):
+#### PyTorch / PyTorch Lightning / transformers / fastai
+
+Write your training loop directly inside the `with` block. The context
+exposes `t.X / t.y / t.X_eval / t.y_eval` and `t.log_metric / t.save`
+helpers — still no `import mlflow`.
 
 ```python
-from skorch import NeuralNetClassifier
+import torch
+from nubison_model import train
 
-train(
-    estimator=NeuralNetClassifier(MyTorchModule, max_epochs=10, lr=0.01),
-    datasets=datasets,
-    target=["target"],
-)
+with train(datasets=datasets, target="target") as t:
+    X = torch.tensor(t.X.values, dtype=torch.float32)
+    y = torch.tensor(t.y.values, dtype=torch.long)
+
+    model = MyTorchModule()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    for epoch in range(30):
+        loss = my_step(model, X, y, optimizer)
+        t.log_metric("loss", loss.item(), step=epoch)
+    t.save(model)
+
+print("run_id:", t.run_id)
 ```
+
+`TrainContext` API (no `import mlflow` in user code):
+
+| Member | Role |
+|--------|------|
+| `t.X` / `t.y` | features / target from `datasets["training"]` |
+| `t.X_eval` / `t.y_eval` | same for `datasets["evaluation"]` (None if absent) |
+| `t.datasets` | original dict — use for non-standard split keys |
+| `t.fit(estimator, **fit_kwargs)` | sklearn-fluent shortcut: fit + save + evaluation score |
+| `t.log_metric / log_metrics / log_param / log_params / set_tag` | mlflow wrappers |
+| `t.save(model, weights_path=None)` | pickle + log as run artifact |
+| `t.run_id` | mlflow run id (read after the `with` block) |
 
 `train()` logs the run but **does not** package the inference code as a
 `pyfunc` model — that is `register()`'s job (see below). This keeps the

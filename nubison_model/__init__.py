@@ -27,6 +27,7 @@ from .Storage import (
 from .Train import (
     DEFAULT_WEIGHTS_PATH,
     ENV_VAR_MLFLOW_EXPERIMENT_NAME,
+    TrainContext,
     train,
 )
 
@@ -45,6 +46,7 @@ __all__ = [
     "NubisonMLFlowModel",
     "register",
     "train",
+    "TrainContext",
     "data",
     "build_inference_service",
     "test_client",

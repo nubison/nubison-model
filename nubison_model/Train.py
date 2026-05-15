@@ -1,37 +1,40 @@
-"""Boilerplate-free training entry point.
+"""Single training context manager — framework-agnostic.
 
-Single ``train(estimator, datasets, target, ...)`` function — sklearn-like
-one-liner that handles tracking URI, experiment, autolog, ``start_run``
-with system metrics, per-dataset lineage (``log_input``), notebook source
-/ git tags (best-effort), eval-metric scoring on non-training splits,
-fitted-estimator pickle, and any extra artifact directories. The user
-never imports ``mlflow``.
+``train()`` is a context manager that opens an MLflow run with autolog
++ dataset lineage + system-friendly tags, and yields a ``TrainContext``
+that exposes ready-to-fit data and ``log_*`` helpers. The user never
+imports ``mlflow``.
 
-Framework coverage assumes the estimator follows the sklearn
-``fit(X, y, **kwargs)`` interface. This covers sklearn / xgboost /
-lightgbm / fastai / keras directly and PyTorch via a wrapper such as
-``skorch`` or ``pytorch-lightning``.
+Two usage paths from the same ``with`` block:
 
-Example::
+1. **sklearn-fluent** (sklearn / xgboost / lightgbm / Keras / skorch)::
 
-    run_id = train(
-        estimator=LogisticRegression(max_iter=500),
-        datasets=datasets,
-        target="target",
-    )
+       with train(datasets=datasets, target="target") as t:
+           t.fit(LogisticRegression(max_iter=100))
+       print(t.run_id)
 
-``pyfunc.log_model`` is intentionally not called here — packaging the
-inference code is ``register()``'s job. The trained estimator is
-pickled to ``src/weights.pkl`` so ``register(artifact_dirs="src")``
-ships it as an inference artifact.
+2. **Custom training loop** (vanilla PyTorch / PyTorch Lightning /
+   transformers / fastai / TensorFlow GradientTape, etc.)::
+
+       with train(datasets=datasets, target="target") as t:
+           for epoch in range(10):
+               loss = my_step(t.X, t.y)
+               t.log_metric("loss", loss, step=epoch)
+           t.save(model)
+       print(t.run_id)
+
+``pyfunc.log_model`` is intentionally not called here — packaging is
+``register()``'s job. ``t.save(model)`` pickles to ``src/weights.pkl``
+so ``register(artifact_dirs="src")`` ships it.
 """
 
 import hashlib
 import logging
 import pickle
 import subprocess
+from contextlib import contextmanager
 from os import getenv, makedirs, path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import mlflow
 import pandas as pd
@@ -50,37 +53,17 @@ DEFAULT_EXPERIMENT_NAME = "Default"
 DEFAULT_WEIGHTS_PATH = "src/weights.pkl"
 
 TRAINING_KEY = "training"
+EVALUATION_KEY = "evaluation"
 
 TargetT = Union[str, List[str]]
-
-
-def _resolve_experiment_name(experiment_name: Optional[str]) -> str:
-    return (
-        experiment_name
-        or getenv(ENV_VAR_MLFLOW_EXPERIMENT_NAME)
-        or DEFAULT_EXPERIMENT_NAME
-    )
-
-
-def _resolve_mlflow_uri(mlflow_uri: Optional[str]) -> str:
-    return mlflow_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or DEFAULT_MLFLOW_URI
-
-
-def _target_columns(target: TargetT) -> List[str]:
-    if isinstance(target, str):
-        return [target]
-    return list(target)
 
 
 def _split_features_target(
     df: pd.DataFrame, target: TargetT
 ) -> Tuple[pd.DataFrame, Any]:
-    cols = _target_columns(target)
+    cols = [target] if isinstance(target, str) else list(target)
     X = df.drop(columns=cols)
-    if isinstance(target, str):
-        y = df[target]
-    else:
-        y = df[cols]
+    y = df[target] if isinstance(target, str) else df[cols]
     return X, y
 
 
@@ -91,10 +74,8 @@ def _best_effort_log_notebook_source() -> None:
 
     The ``notebook.hash`` tag is mlplatform's Source-column primary key:
     its frontend matches runs to notebooks by this tag (sliced to 12
-    chars) and uses ``<hash>.ipynb`` as the download filename. Falls back
-    to git commit / run_id otherwise, but neither survives in the
-    typical mlplatform notebook container (``/home/jovyan`` is not a git
-    repo), so this tag is the only stable identity."""
+    chars) and uses ``<hash>.ipynb`` as the download filename.
+    """
     session = getenv(ENV_VAR_JPY_SESSION_NAME)
     if not session or not path.exists(session):
         return
@@ -112,9 +93,7 @@ def _best_effort_git_tags() -> Dict[str, str]:
     tags: Dict[str, str] = {}
     try:
         commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            text=True,
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
         ).strip()
         if commit:
             tags["mlflow.source.git.commit"] = commit
@@ -122,9 +101,7 @@ def _best_effort_git_tags() -> Dict[str, str]:
         return tags
     try:
         status = subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            stderr=subprocess.DEVNULL,
-            text=True,
+            ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL, text=True
         )
         is_dirty = "true" if status.strip() else "false"
         tags["mlflow.source.git.dirty"] = is_dirty
@@ -145,11 +122,8 @@ def _log_dataset_inputs(
     """Log each DataFrame entry as an mlflow input for lineage.
 
     mlflow 3.x only accepts ``source`` strings whose scheme has a
-    registered ``DatasetSource`` resolver (``s3://``, ``file://``,
-    ``http://``...). Our in-memory marker ``memory://`` and custom
-    ``dbref://`` (when no SQL Explorer connection is registered) would
-    raise; for those we drop the ``source`` kwarg and let mlflow use
-    its default ``CodeDatasetSource``.
+    registered DatasetSource resolver — we drop the kwarg for our
+    in-memory / ``dbref://`` URIs and let mlflow use its default.
     """
     for ctx, df in datasets.items():
         if not isinstance(df, pd.DataFrame):
@@ -166,71 +140,6 @@ def _log_dataset_inputs(
             logger.debug(f"log_input failed for {ctx!r}: {e}")
 
 
-def _resolve_fit_kwargs(
-    fit_kwargs: Optional[Dict[str, Any]],
-    datasets: Dict[str, pd.DataFrame],
-    target: TargetT,
-) -> Dict[str, Any]:
-    """Resolve magic keys in fit_kwargs.
-
-    ``eval_set`` accepts a key from ``datasets`` (e.g. ``"evaluation"``)
-    and is unpacked to ``[(X_eval, y_eval)]`` — the xgboost / lightgbm
-    convention. Lists of keys are also accepted.
-    """
-    if not fit_kwargs:
-        return {}
-    resolved = dict(fit_kwargs)
-    eval_set = resolved.get("eval_set")
-    if isinstance(eval_set, str) and eval_set in datasets:
-        X_e, y_e = _split_features_target(datasets[eval_set], target)
-        resolved["eval_set"] = [(X_e, y_e)]
-    elif isinstance(eval_set, list) and all(
-        isinstance(item, str) and item in datasets for item in eval_set
-    ):
-        resolved["eval_set"] = [
-            _split_features_target(datasets[k], target) for k in eval_set
-        ]
-    return resolved
-
-
-def _log_eval_metrics(
-    estimator: Any,
-    datasets: Dict[str, pd.DataFrame],
-    target: TargetT,
-    model_type: str,
-    exclude: str = TRAINING_KEY,
-) -> None:
-    """Predict on every non-training dataset and log a single summary metric.
-
-    Metric: accuracy for classifier, R^2 for regressor. Best-effort —
-    autolog already captures training metrics, so this is just for the
-    other splits.
-    """
-    for ctx, df in datasets.items():
-        if ctx == exclude or not isinstance(df, pd.DataFrame):
-            continue
-        try:
-            X_, y_ = _split_features_target(df, target)
-            score = estimator.score(X_, y_)
-            metric_key = "accuracy" if model_type == "classifier" else "r2"
-            mlflow.log_metric(f"{ctx}_{metric_key}", float(score))
-        except Exception as e:
-            logger.debug(f"eval-metric logging failed for {ctx!r}: {e}")
-
-
-def _dump_weights(estimator: Any, weights_path: str) -> None:
-    """Pickle the fitted estimator to disk and log it as an artifact."""
-    parent = path.dirname(weights_path)
-    if parent:
-        makedirs(parent, exist_ok=True)
-    with open(weights_path, "wb") as f:
-        pickle.dump(estimator, f)
-    try:
-        mlflow.log_artifact(weights_path)
-    except Exception as e:
-        logger.debug(f"log_artifact for weights failed: {e}")
-
-
 def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
     if not artifact_dirs:
         return
@@ -243,93 +152,165 @@ def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
                 logger.debug(f"log_artifacts({entry!r}) failed: {e}")
 
 
+class TrainContext:
+    """Yielded by :func:`train`.
+
+    Attributes:
+        X, y: feature matrix and target from ``datasets["training"]``.
+        X_eval, y_eval: from ``datasets["evaluation"]`` (None if absent).
+        datasets: the original dict.
+        run_id: mlflow run id (populated once the ``with`` block opens).
+
+    Methods (mlflow wrappers — no ``import mlflow`` needed in user code):
+        fit(estimator, **fit_kwargs): sklearn-fluent shortcut. Calls
+            ``estimator.fit(X, y, **fit_kwargs)``, auto-saves the fitted
+            estimator to ``weights_path``, and logs ``evaluation_score``
+            if ``X_eval / y_eval`` exist and the estimator has ``score()``.
+        log_metric / log_metrics / log_param / log_params / set_tag:
+            thin wrappers over the matching ``mlflow.*`` calls.
+        save(model, weights_path=None): pickle ``model`` and log it as a
+            run artifact. Default destination is ``train()``'s
+            ``weights_path`` so ``register(artifact_dirs="src")`` ships it.
+    """
+
+    def __init__(
+        self,
+        datasets: Dict[str, pd.DataFrame],
+        target: TargetT,
+        weights_path: str,
+    ):
+        if TRAINING_KEY not in datasets:
+            raise KeyError(
+                f"datasets must contain a {TRAINING_KEY!r} key "
+                f"(got: {list(datasets)})"
+            )
+        self.datasets = datasets
+        self._target = target
+        self._weights_path = weights_path
+        self.X, self.y = _split_features_target(datasets[TRAINING_KEY], target)
+        eval_df = datasets.get(EVALUATION_KEY)
+        if isinstance(eval_df, pd.DataFrame):
+            self.X_eval, self.y_eval = _split_features_target(eval_df, target)
+        else:
+            self.X_eval = None
+            self.y_eval = None
+        self.run_id: Optional[str] = None
+
+    def fit(self, estimator: Any, **fit_kwargs: Any) -> Any:
+        """Train ``estimator`` on ``self.X / self.y`` (sklearn-style)."""
+        estimator.fit(self.X, self.y, **fit_kwargs)
+        self.save(estimator)
+        if self.X_eval is not None and self.y_eval is not None:
+            try:
+                score = estimator.score(self.X_eval, self.y_eval)
+                mlflow.log_metric("evaluation_score", float(score))
+            except Exception as e:
+                logger.debug(f"evaluation_score skipped: {e}")
+        return estimator
+
+    def log_metric(
+        self, key: str, value: float, step: Optional[int] = None
+    ) -> None:
+        mlflow.log_metric(key, value, step=step)
+
+    def log_metrics(self, metrics: Dict[str, float]) -> None:
+        mlflow.log_metrics(metrics)
+
+    def log_param(self, key: str, value: Any) -> None:
+        mlflow.log_param(key, value)
+
+    def log_params(self, params: Dict[str, Any]) -> None:
+        mlflow.log_params(params)
+
+    def set_tag(self, key: str, value: Any) -> None:
+        mlflow.set_tag(key, value)
+
+    def save(self, model: Any, weights_path: Optional[str] = None) -> None:
+        """Pickle ``model`` and log it as a run artifact.
+
+        Default destination is the ``weights_path`` passed to
+        ``train()``. ``register(artifact_dirs="src")`` then ships the
+        file as an inference artifact.
+        """
+        dst = weights_path or self._weights_path
+        parent = path.dirname(dst)
+        if parent:
+            makedirs(parent, exist_ok=True)
+        with open(dst, "wb") as f:
+            pickle.dump(model, f)
+        try:
+            mlflow.log_artifact(dst)
+        except Exception as e:
+            logger.debug(f"log_artifact for weights failed: {e}")
+
+
+@contextmanager
 def train(
-    estimator: Any,
     datasets: Dict[str, pd.DataFrame],
     target: TargetT,
-    model_type: Literal["classifier", "regressor"] = "classifier",
+    *,
+    weights_path: str = DEFAULT_WEIGHTS_PATH,
     artifact_dirs: Optional[str] = None,
     extra_params: Optional[Dict[str, Any]] = None,
     extra_tags: Optional[Dict[str, str]] = None,
-    fit_kwargs: Optional[Dict[str, Any]] = None,
     experiment_name: Optional[str] = None,
     mlflow_uri: Optional[str] = None,
-    weights_path: str = DEFAULT_WEIGHTS_PATH,
-) -> str:
-    """Run one MLflow training run end-to-end and return the ``run_id``.
+) -> Iterator[TrainContext]:
+    """Open an autolog'd MLflow run and yield a :class:`TrainContext`.
 
     Args:
-        estimator: An estimator implementing ``fit(X, y, **kwargs)``,
-            ``predict``, and ``score``. Works for sklearn / xgboost /
-            lightgbm / keras directly, and for PyTorch via wrappers like
-            ``skorch`` or ``pytorch-lightning``.
-        datasets: Mapping of context name → DataFrame. Must contain a
-            ``"training"`` key. Additional keys (e.g. ``"evaluation"``,
-            ``"test"``) are logged as inputs and scored.
-        target: Column name(s) holding the label(s). String for single-
-            target, list for multi-target.
-        model_type: ``"classifier"`` or ``"regressor"`` — selects the
-            eval metric (``accuracy`` / ``r2``) for non-training splits.
-        artifact_dirs: Comma-separated directories logged as run
-            artifacts via ``mlflow.log_artifacts``.
-        extra_params: Forwarded to ``mlflow.log_params``.
-        extra_tags: Forwarded to ``mlflow.set_tags``.
-        fit_kwargs: Passed through to ``estimator.fit``. The magic key
-            ``eval_set`` accepts a datasets key (e.g.
-            ``{"eval_set": "evaluation"}``) and is unpacked to
-            ``[(X_eval, y_eval)]``.
-        experiment_name: Defaults to env ``MLFLOW_EXPERIMENT_NAME`` or
+        datasets: ``{name: DataFrame}`` from ``data.split``. Must include
+            ``"training"``; ``"evaluation"`` is recognized for the
+            ``X_eval / y_eval`` convenience and auto-scoring.
+        target: label column name (or list of names for multi-target).
+        weights_path: where ``t.save(model)`` writes the pickle. Default
+            ``src/weights.pkl`` matches ``register(artifact_dirs="src")``.
+        artifact_dirs: comma-separated extra directories logged at the
+            run level via ``mlflow.log_artifacts`` on exit.
+        extra_params / extra_tags: forwarded to ``mlflow.log_params`` /
+            ``mlflow.set_tags`` once the run starts.
+        experiment_name: defaults to env ``MLFLOW_EXPERIMENT_NAME`` or
             ``"Default"``.
-        mlflow_uri: Defaults to env ``MLFLOW_TRACKING_URI``.
-        weights_path: Pickle destination for the fitted estimator.
-            Default ``src/weights.pkl`` matches consumer convention so
-            ``register(artifact_dirs="src")`` packs it.
+        mlflow_uri: defaults to env ``MLFLOW_TRACKING_URI``.
 
-    Returns:
-        The mlflow ``run_id`` of the created run.
+    Yields:
+        :class:`TrainContext` — see its docstring for the full API.
 
     Raises:
         KeyError: ``datasets`` does not contain a ``"training"`` key.
     """
-    if TRAINING_KEY not in datasets:
-        raise KeyError(
-            f"datasets must contain a {TRAINING_KEY!r} key "
-            f"(got: {list(datasets)})"
-        )
-
-    mlflow.set_tracking_uri(_resolve_mlflow_uri(mlflow_uri))
-    mlflow.set_experiment(_resolve_experiment_name(experiment_name))
+    mlflow.set_tracking_uri(
+        mlflow_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or DEFAULT_MLFLOW_URI
+    )
+    mlflow.set_experiment(
+        experiment_name
+        or getenv(ENV_VAR_MLFLOW_EXPERIMENT_NAME)
+        or DEFAULT_EXPERIMENT_NAME
+    )
     try:
         # log_datasets=False — keep our explicit per-split lineage from
-        # `_log_dataset_inputs`. Without it, autolog adds its own generic
-        # "dataset" entry that obscures the training / evaluation /
-        # ... splits we want for mlflow.log_input lineage.
+        # `_log_dataset_inputs`; autolog's generic "dataset" entry would
+        # otherwise override the training / evaluation / ... splits.
         mlflow.autolog(log_datasets=False)
     except Exception as e:
         logger.debug(f"mlflow.autolog() failed: {e}")
 
+    ctx = TrainContext(datasets, target, weights_path)
+
     with mlflow.start_run() as run:
+        ctx.run_id = run.info.run_id
         _best_effort_log_notebook_source()
         git_tags = _best_effort_git_tags()
         if git_tags:
             mlflow.set_tags(git_tags)
-
-        train_df = datasets[TRAINING_KEY]
-        X_train, y_train = _split_features_target(train_df, target)
-        fit_kwargs_resolved = _resolve_fit_kwargs(fit_kwargs, datasets, target)
-        estimator.fit(X_train, y_train, **fit_kwargs_resolved)
-
-        # Log per-split lineage *after* fit so autolog's own dataset
-        # entry does not override our named splits.
-        _log_dataset_inputs(datasets, target)
-
-        _log_eval_metrics(estimator, datasets, target, model_type)
-        _dump_weights(estimator, weights_path)
-        _log_extra_artifact_dirs(artifact_dirs)
-
         if extra_params:
             mlflow.log_params(extra_params)
         if extra_tags:
             mlflow.set_tags(extra_tags)
-
-        return run.info.run_id
+        try:
+            yield ctx
+        finally:
+            # Log per-split lineage *after* the user's training so
+            # autolog's hooks don't override ours.
+            _log_dataset_inputs(datasets, target)
+            _log_extra_artifact_dirs(artifact_dirs)
