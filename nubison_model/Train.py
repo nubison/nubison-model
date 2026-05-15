@@ -34,7 +34,7 @@ import pickle
 import subprocess
 from contextlib import contextmanager
 from os import getenv, makedirs, path
-from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import mlflow
 import pandas as pd
@@ -178,7 +178,7 @@ class TrainContext:
         datasets: Dict[str, pd.DataFrame],
         target: TargetT,
         weights_path: str,
-        model_type: str,
+        model_type: Optional[str],
     ):
         if TRAINING_KEY not in datasets:
             raise KeyError(
@@ -201,14 +201,18 @@ class TrainContext:
     def fit(self, estimator: Any, **fit_kwargs: Any) -> Any:
         """Train ``estimator`` on ``self.X / self.y`` (sklearn-style).
 
-        Auto-saves the fitted model to ``weights_path`` and logs
-        ``evaluation_accuracy`` (classifier) or ``evaluation_r2``
-        (regressor) on the evaluation split — sklearn's ``score()``
-        returns accuracy for classifiers, R² for regressors.
+        Auto-saves the fitted model to ``weights_path``. When
+        ``model_type`` is set ("classifier" / "regressor") and an
+        ``"evaluation"`` split is present, also logs the matching
+        metric (``evaluation_accuracy`` / ``evaluation_r2``).
         """
         estimator.fit(self.X, self.y, **fit_kwargs)
         self.save(estimator)
-        if self.X_eval is not None and self.y_eval is not None:
+        if (
+            self._model_type
+            and self.X_eval is not None
+            and self.y_eval is not None
+        ):
             try:
                 score = estimator.score(self.X_eval, self.y_eval)
                 metric_key = (
@@ -262,7 +266,7 @@ def train(
     datasets: Dict[str, pd.DataFrame],
     target: TargetT,
     *,
-    model_type: Literal["classifier", "regressor"] = "classifier",
+    model_type: Optional[str] = None,
     weights_path: str = DEFAULT_WEIGHTS_PATH,
     artifact_dirs: Optional[str] = None,
     extra_params: Optional[Dict[str, Any]] = None,
@@ -277,9 +281,13 @@ def train(
             ``"training"``; ``"evaluation"`` is recognized for the
             ``X_eval / y_eval`` convenience and auto-scoring.
         target: label column name (or list of names for multi-target).
-        model_type: ``"classifier"`` or ``"regressor"`` — selects the
-            evaluation metric name (``evaluation_accuracy`` / ``evaluation_r2``)
-            that ``t.fit()`` logs on the evaluation split.
+        model_type: free-form string tagged on the run as ``model_type``
+            (surfaced in the nubison UI). Two values get special
+            treatment: ``"classifier"`` and ``"regressor"`` make
+            ``t.fit()`` log ``evaluation_accuracy`` / ``evaluation_r2``
+            on the evaluation split. Other values (e.g. ``"clustering"``,
+            ``"anomaly_detection"``) just tag the run — the user logs
+            their own metrics via ``t.log_metric``.
         weights_path: where ``t.save(model)`` writes the pickle. Default
             ``src/weights.pkl`` matches ``register(artifact_dirs="src")``.
         artifact_dirs: comma-separated extra directories logged at the
@@ -320,6 +328,8 @@ def train(
         git_tags = _best_effort_git_tags()
         if git_tags:
             mlflow.set_tags(git_tags)
+        if model_type:
+            mlflow.set_tag("model_type", model_type)
         if extra_params:
             mlflow.log_params(extra_params)
         if extra_tags:

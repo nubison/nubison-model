@@ -109,10 +109,23 @@ class TestFitShortcut:
         self, datasets, tmp_path, monkeypatch, mlflow_server
     ):
         monkeypatch.chdir(tmp_path)
-        with train(datasets=datasets, target="target") as t:
+        with train(
+            datasets=datasets, target="target", model_type="classifier"
+        ) as t:
             t.fit(LogisticRegression(max_iter=200))
         run = MlflowClient().get_run(t.run_id)
         assert "evaluation_accuracy" in run.data.metrics
+
+    def test_fit_without_model_type_skips_eval_metric(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        # Default model_type=None → no auto evaluation_* metric.
+        monkeypatch.chdir(tmp_path)
+        with train(datasets=datasets, target="target") as t:
+            t.fit(LogisticRegression(max_iter=200))
+        run = MlflowClient().get_run(t.run_id)
+        assert "evaluation_accuracy" not in run.data.metrics
+        assert "evaluation_r2" not in run.data.metrics
 
     def test_fit_logs_evaluation_r2_for_regressor(
         self, tmp_path, monkeypatch, mlflow_server
