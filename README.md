@@ -76,18 +76,18 @@ exposing ready-to-fit data plus mlflow-wrapped helpers — you never
 
 #### sklearn / xgboost / lightgbm / Keras / skorch
 
-`t.fit(estimator, **fit_kwargs)` runs `estimator.fit(t.X, t.y, ...)`,
-auto-pickles the fitted model to `weights_path`, and logs an
-`evaluation_score` from the `"evaluation"` split if present.
+`t.fit(estimator, **fit_kwargs)` runs `estimator.fit(t.X_train, t.y_train, ...)`,
+auto-pickles the fitted model to `weights_path`, and (when `model_type`
+is set) logs `val_accuracy` or `val_r2` on the `"val"` split.
 
 ```python
 from nubison_model import data, train
 from sklearn.linear_model import LogisticRegression
 
 full = data.load("s3://my-bucket/all.parquet")
-datasets = data.split(full, {"training": 0.8, "evaluation": 0.2}, random_state=42)
+datasets = data.split(full, {"train": 0.8, "val": 0.2}, random_state=42)
 
-with train(datasets=datasets, target="target") as t:
+with train(datasets=datasets, target=["target"], model_type="classifier") as t:
     t.fit(LogisticRegression(max_iter=500))
 
 print("run_id:", t.run_id)
@@ -99,10 +99,10 @@ epochs / validation_data), pass them as kwargs:
 ```python
 from xgboost import XGBClassifier
 
-with train(datasets=datasets, target="target") as t:
+with train(datasets=datasets, target=["target"], model_type="classifier") as t:
     t.fit(
         XGBClassifier(n_estimators=500),
-        eval_set=[(t.X_eval, t.y_eval)],
+        eval_set=[(t.X_val, t.y_val)],
         early_stopping_rounds=20,
     )
 ```
@@ -110,16 +110,16 @@ with train(datasets=datasets, target="target") as t:
 #### PyTorch / PyTorch Lightning / transformers / fastai
 
 Write your training loop directly inside the `with` block. The context
-exposes `t.X / t.y / t.X_eval / t.y_eval` and `t.log_metric / t.save`
-helpers — still no `import mlflow`.
+exposes `t.X_train / t.y_train / t.X_val / t.y_val / t.X_test / t.y_test`
+and `t.log_metric / t.save` helpers — still no `import mlflow`.
 
 ```python
 import torch
 from nubison_model import train
 
-with train(datasets=datasets, target="target") as t:
-    X = torch.tensor(t.X.values, dtype=torch.float32)
-    y = torch.tensor(t.y.values, dtype=torch.long)
+with train(datasets=datasets, target=["target"], model_type="classifier") as t:
+    X = torch.tensor(t.X_train.values, dtype=torch.float32)
+    y = torch.tensor(t.y_train.values.ravel(), dtype=torch.long)
 
     model = MyTorchModule()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
@@ -135,8 +135,9 @@ print("run_id:", t.run_id)
 
 | Member | Role |
 |--------|------|
-| `t.X` / `t.y` | features / target from `datasets["training"]` |
-| `t.X_eval` / `t.y_eval` | same for `datasets["evaluation"]` (None if absent) |
+| `t.X_train` / `t.y_train` | features / target from `datasets["train"]` |
+| `t.X_val` / `t.y_val` | same for `datasets["val"]` (None if absent) |
+| `t.X_test` / `t.y_test` | same for `datasets["test"]` (None if absent) |
 | `t.datasets` | original dict — use for non-standard split keys |
 | `t.fit(estimator, **fit_kwargs)` | sklearn-fluent shortcut: fit + save + evaluation score |
 | `t.log_metric / log_metrics / log_param / log_params / set_tag` | mlflow wrappers |

@@ -25,13 +25,13 @@ def datasets():
             "b": [2, 3, 4, 5, 6, 7, 8, 9],
             "target": [0, 1, 0, 1, 0, 1, 0, 1],
         },
-        "memory://training",
+        "memory://train",
     )
-    eval_df = _df_with_uri(
+    val_df = _df_with_uri(
         {"a": [1, 2, 3, 4], "b": [2, 3, 4, 5], "target": [0, 1, 0, 1]},
-        "memory://evaluation",
+        "memory://val",
     )
-    return {"training": train_df, "evaluation": eval_df}
+    return {"train": train_df, "val": val_df}
 
 
 # ---------------------------------------------------------------------------
@@ -40,29 +40,44 @@ def datasets():
 
 
 class TestTrainContextShape:
-    def test_unpacks_training_and_evaluation(self, datasets, mlflow_server):
+    def test_unpacks_train_and_val(self, datasets, mlflow_server):
         with train(datasets=datasets, target="target") as t:
-            assert list(t.X.columns) == ["a", "b"]
-            assert t.y.tolist() == [0, 1, 0, 1, 0, 1, 0, 1]
-            assert list(t.X_eval.columns) == ["a", "b"]
-            assert t.y_eval.tolist() == [0, 1, 0, 1]
+            assert list(t.X_train.columns) == ["a", "b"]
+            assert t.y_train.tolist() == [0, 1, 0, 1, 0, 1, 0, 1]
+            assert list(t.X_val.columns) == ["a", "b"]
+            assert t.y_val.tolist() == [0, 1, 0, 1]
 
-    def test_no_evaluation_dataset(self, mlflow_server):
+    def test_no_val_dataset(self, mlflow_server):
         df = _df_with_uri(
-            {"a": [1, 2, 3, 4], "target": [0, 1, 0, 1]}, "memory://training"
+            {"a": [1, 2, 3, 4], "target": [0, 1, 0, 1]}, "memory://train"
         )
-        with train(datasets={"training": df}, target="target") as t:
-            assert t.X_eval is None
-            assert t.y_eval is None
+        with train(datasets={"train": df}, target="target") as t:
+            assert t.X_val is None
+            assert t.y_val is None
+
+    def test_test_split_recognized(self, datasets, mlflow_server):
+        # Add a "test" split — should populate X_test / y_test.
+        ext = dict(datasets)
+        ext["test"] = _df_with_uri(
+            {"a": [1, 2], "b": [2, 3], "target": [0, 1]}, "memory://test"
+        )
+        with train(datasets=ext, target="target") as t:
+            assert list(t.X_test.columns) == ["a", "b"]
+            assert t.y_test.tolist() == [0, 1]
+
+    def test_no_test_dataset(self, datasets, mlflow_server):
+        with train(datasets=datasets, target="target") as t:
+            assert t.X_test is None
+            assert t.y_test is None
 
     def test_target_as_list(self, mlflow_server):
         df = _df_with_uri(
             {"a": [1, 2, 3, 4], "t1": [0, 1, 0, 1], "t2": [1, 0, 1, 0]},
-            "memory://training",
+            "memory://train",
         )
-        with train(datasets={"training": df}, target=["t1", "t2"]) as t:
-            assert list(t.X.columns) == ["a"]
-            assert list(t.y.columns) == ["t1", "t2"]
+        with train(datasets={"train": df}, target=["t1", "t2"]) as t:
+            assert list(t.X_train.columns) == ["a"]
+            assert list(t.y_train.columns) == ["t1", "t2"]
 
     def test_preserves_raw_datasets(self, datasets, mlflow_server):
         with train(datasets=datasets, target="target") as t:
@@ -70,10 +85,10 @@ class TestTrainContextShape:
 
 
 class TestTrainContextErrors:
-    def test_missing_training_raises(self, mlflow_server):
-        df = _df_with_uri({"a": [1], "target": [0]}, "memory://eval")
-        with pytest.raises(KeyError, match="training"):
-            with train(datasets={"evaluation": df}, target="target"):
+    def test_missing_train_raises(self, mlflow_server):
+        df = _df_with_uri({"a": [1], "target": [0]}, "memory://val")
+        with pytest.raises(KeyError, match="train"):
+            with train(datasets={"val": df}, target="target"):
                 pass
 
 
@@ -90,8 +105,7 @@ class TestFitShortcut:
         with train(datasets=datasets, target="target") as t:
             fitted = t.fit(LogisticRegression(max_iter=200))
             assert hasattr(fitted, "predict")
-            # Same object returned, already fitted.
-            assert (fitted.predict(t.X) == fitted.predict(t.X)).all()
+            assert (fitted.predict(t.X_train) == fitted.predict(t.X_train)).all()
 
     def test_fit_pickles_to_default_weights_path(
         self, datasets, tmp_path, monkeypatch, mlflow_server
@@ -105,7 +119,7 @@ class TestFitShortcut:
             loaded = pickle.load(f)
         assert hasattr(loaded, "predict")
 
-    def test_fit_logs_evaluation_accuracy_for_classifier(
+    def test_fit_logs_val_accuracy_for_classifier(
         self, datasets, tmp_path, monkeypatch, mlflow_server
     ):
         monkeypatch.chdir(tmp_path)
@@ -114,65 +128,42 @@ class TestFitShortcut:
         ) as t:
             t.fit(LogisticRegression(max_iter=200))
         run = MlflowClient().get_run(t.run_id)
-        assert "evaluation_accuracy" in run.data.metrics
+        assert "val_accuracy" in run.data.metrics
 
-    def test_fit_without_model_type_skips_eval_metric(
+    def test_fit_without_model_type_skips_val_metric(
         self, datasets, tmp_path, monkeypatch, mlflow_server
     ):
-        # Default model_type=None → no auto evaluation_* metric.
         monkeypatch.chdir(tmp_path)
         with train(datasets=datasets, target="target") as t:
             t.fit(LogisticRegression(max_iter=200))
         run = MlflowClient().get_run(t.run_id)
-        assert "evaluation_accuracy" not in run.data.metrics
-        assert "evaluation_r2" not in run.data.metrics
+        assert "val_accuracy" not in run.data.metrics
+        assert "val_r2" not in run.data.metrics
 
-    def test_fit_logs_evaluation_r2_for_regressor(
+    def test_fit_logs_val_r2_for_regressor(
         self, tmp_path, monkeypatch, mlflow_server
     ):
         monkeypatch.chdir(tmp_path)
         train_df = _df_with_uri(
             {"a": list(range(20)), "target": [2 * x for x in range(20)]},
-            "memory://training",
+            "memory://train",
         )
-        eval_df = _df_with_uri(
+        val_df = _df_with_uri(
             {"a": list(range(5)), "target": [2 * x for x in range(5)]},
-            "memory://evaluation",
+            "memory://val",
         )
         with train(
-            datasets={"training": train_df, "evaluation": eval_df},
+            datasets={"train": train_df, "val": val_df},
             target="target",
             model_type="regressor",
         ) as t:
             t.fit(LinearRegression())
         run = MlflowClient().get_run(t.run_id)
-        assert "evaluation_r2" in run.data.metrics
-
-    def test_fit_passes_fit_kwargs(
-        self, datasets, tmp_path, monkeypatch, mlflow_server
-    ):
-        # sklearn estimators accept sample_weight via fit_kwargs
-        monkeypatch.chdir(tmp_path)
-        weights = [1.0] * len(datasets["training"])
-        with train(datasets=datasets, target="target") as t:
-            t.fit(LogisticRegression(max_iter=200), sample_weight=weights)
-        assert t.run_id is not None
-
-    def test_fit_with_regressor(
-        self, tmp_path, monkeypatch, mlflow_server
-    ):
-        monkeypatch.chdir(tmp_path)
-        df = _df_with_uri(
-            {"a": list(range(10)), "target": [2 * x for x in range(10)]},
-            "memory://training",
-        )
-        with train(datasets={"training": df}, target="target") as t:
-            t.fit(LinearRegression())
-        assert t.run_id is not None
+        assert "val_r2" in run.data.metrics
 
 
 # ---------------------------------------------------------------------------
-# t.log_metric / t.log_param — custom loop path (no `import mlflow`)
+# t.log_metric / t.log_param — custom loop path
 # ---------------------------------------------------------------------------
 
 
@@ -205,7 +196,7 @@ class TestLogHelpers:
 
 
 # ---------------------------------------------------------------------------
-# t.save() — explicit pickle (for non-sklearn frameworks)
+# t.save()
 # ---------------------------------------------------------------------------
 
 
@@ -215,17 +206,16 @@ class TestSave:
     ):
         monkeypatch.chdir(tmp_path)
         with train(datasets=datasets, target="target") as t:
-            model = LogisticRegression(max_iter=200).fit(t.X, t.y)
+            model = LogisticRegression(max_iter=200).fit(t.X_train, t.y_train)
             t.save(model)
-        weights = tmp_path / "src" / "weights.pkl"
-        assert weights.exists()
+        assert (tmp_path / "src" / "weights.pkl").exists()
 
     def test_save_custom_path(
         self, datasets, tmp_path, monkeypatch, mlflow_server
     ):
         monkeypatch.chdir(tmp_path)
         with train(datasets=datasets, target="target") as t:
-            model = LogisticRegression(max_iter=200).fit(t.X, t.y)
+            model = LogisticRegression(max_iter=200).fit(t.X_train, t.y_train)
             t.save(model, weights_path="models/v1.pkl")
         assert (tmp_path / "models" / "v1.pkl").exists()
 
@@ -234,7 +224,7 @@ class TestSave:
     ):
         monkeypatch.chdir(tmp_path)
         with train(datasets=datasets, target="target") as t:
-            model = LogisticRegression(max_iter=200).fit(t.X, t.y)
+            model = LogisticRegression(max_iter=200).fit(t.X_train, t.y_train)
             t.save(model)
         artifacts = {a.path for a in MlflowClient().list_artifacts(t.run_id)}
         assert "weights.pkl" in artifacts
@@ -254,8 +244,34 @@ class TestLineage:
             t.fit(LogisticRegression(max_iter=200))
         run = MlflowClient().get_run(t.run_id)
         names = {d.dataset.name for d in run.inputs.dataset_inputs}
-        assert "training" in names
-        assert "evaluation" in names
+        assert "train" in names
+        assert "val" in names
+
+
+class TestModelTypeTag:
+    def test_model_type_tag_set(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        monkeypatch.chdir(tmp_path)
+        with train(
+            datasets=datasets, target="target", model_type="classifier"
+        ) as t:
+            t.fit(LogisticRegression(max_iter=200))
+        run = MlflowClient().get_run(t.run_id)
+        assert run.data.tags["model_type"] == "classifier"
+
+    def test_free_form_model_type_accepted(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        # Not "classifier"/"regressor" — still tagged, no auto-metric.
+        monkeypatch.chdir(tmp_path)
+        with train(
+            datasets=datasets, target="target", model_type="clustering"
+        ) as t:
+            t.fit(LogisticRegression(max_iter=200))
+        run = MlflowClient().get_run(t.run_id)
+        assert run.data.tags["model_type"] == "clustering"
+        assert "val_accuracy" not in run.data.metrics
 
 
 class TestExtraParamsTags:

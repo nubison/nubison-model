@@ -18,7 +18,7 @@ Two usage paths from the same ``with`` block:
 
        with train(datasets=datasets, target="target") as t:
            for epoch in range(10):
-               loss = my_step(t.X, t.y)
+               loss = my_step(t.X_train, t.y_train)
                t.log_metric("loss", loss, step=epoch)
            t.save(model)
        print(t.run_id)
@@ -52,8 +52,9 @@ ENV_VAR_JPY_SESSION_NAME = "JPY_SESSION_NAME"
 DEFAULT_EXPERIMENT_NAME = "Default"
 DEFAULT_WEIGHTS_PATH = "src/weights.pkl"
 
-TRAINING_KEY = "training"
-EVALUATION_KEY = "evaluation"
+TRAIN_KEY = "train"
+VAL_KEY = "val"
+TEST_KEY = "test"
 
 TargetT = Union[str, List[str]]
 
@@ -156,16 +157,18 @@ class TrainContext:
     """Yielded by :func:`train`.
 
     Attributes:
-        X, y: feature matrix and target from ``datasets["training"]``.
-        X_eval, y_eval: from ``datasets["evaluation"]`` (None if absent).
+        X_train, y_train: features / target from ``datasets["train"]``.
+        X_val, y_val: from ``datasets["val"]`` (None if absent).
+        X_test, y_test: from ``datasets["test"]`` (None if absent).
         datasets: the original dict.
         run_id: mlflow run id (populated once the ``with`` block opens).
 
     Methods (mlflow wrappers — no ``import mlflow`` needed in user code):
         fit(estimator, **fit_kwargs): sklearn-fluent shortcut. Calls
-            ``estimator.fit(X, y, **fit_kwargs)``, auto-saves the fitted
-            estimator to ``weights_path``, and logs ``evaluation_score``
-            if ``X_eval / y_eval`` exist and the estimator has ``score()``.
+            ``estimator.fit(X_train, y_train, **fit_kwargs)``,
+            auto-saves the fitted estimator to ``weights_path``, and
+            (when ``model_type`` is set) logs ``val_accuracy`` /
+            ``val_r2`` on the ``val`` split.
         log_metric / log_metrics / log_param / log_params / set_tag:
             thin wrappers over the matching ``mlflow.*`` calls.
         save(model, weights_path=None): pickle ``model`` and log it as a
@@ -180,49 +183,57 @@ class TrainContext:
         weights_path: str,
         model_type: Optional[str],
     ):
-        if TRAINING_KEY not in datasets:
+        if TRAIN_KEY not in datasets:
             raise KeyError(
-                f"datasets must contain a {TRAINING_KEY!r} key "
+                f"datasets must contain a {TRAIN_KEY!r} key "
                 f"(got: {list(datasets)})"
             )
         self.datasets = datasets
         self._target = target
         self._weights_path = weights_path
         self._model_type = model_type
-        self.X, self.y = _split_features_target(datasets[TRAINING_KEY], target)
-        eval_df = datasets.get(EVALUATION_KEY)
-        if isinstance(eval_df, pd.DataFrame):
-            self.X_eval, self.y_eval = _split_features_target(eval_df, target)
+        self.X_train, self.y_train = _split_features_target(
+            datasets[TRAIN_KEY], target
+        )
+        val_df = datasets.get(VAL_KEY)
+        if isinstance(val_df, pd.DataFrame):
+            self.X_val, self.y_val = _split_features_target(val_df, target)
         else:
-            self.X_eval = None
-            self.y_eval = None
+            self.X_val = None
+            self.y_val = None
+        test_df = datasets.get(TEST_KEY)
+        if isinstance(test_df, pd.DataFrame):
+            self.X_test, self.y_test = _split_features_target(test_df, target)
+        else:
+            self.X_test = None
+            self.y_test = None
         self.run_id: Optional[str] = None
 
     def fit(self, estimator: Any, **fit_kwargs: Any) -> Any:
-        """Train ``estimator`` on ``self.X / self.y`` (sklearn-style).
+        """Train ``estimator`` on ``self.X_train / self.y_train``.
 
         Auto-saves the fitted model to ``weights_path``. When
-        ``model_type`` is set ("classifier" / "regressor") and an
-        ``"evaluation"`` split is present, also logs the matching
-        metric (``evaluation_accuracy`` / ``evaluation_r2``).
+        ``model_type`` is set ("classifier" / "regressor") and a
+        ``"val"`` split is present, also logs the matching metric
+        (``val_accuracy`` / ``val_r2``).
         """
-        estimator.fit(self.X, self.y, **fit_kwargs)
+        estimator.fit(self.X_train, self.y_train, **fit_kwargs)
         self.save(estimator)
         if (
             self._model_type
-            and self.X_eval is not None
-            and self.y_eval is not None
+            and self.X_val is not None
+            and self.y_val is not None
         ):
             try:
-                score = estimator.score(self.X_eval, self.y_eval)
+                score = estimator.score(self.X_val, self.y_val)
                 metric_key = (
-                    "evaluation_accuracy"
+                    "val_accuracy"
                     if self._model_type == "classifier"
-                    else "evaluation_r2"
+                    else "val_r2"
                 )
                 mlflow.log_metric(metric_key, float(score))
             except Exception as e:
-                logger.debug(f"evaluation score skipped: {e}")
+                logger.debug(f"val score skipped: {e}")
         return estimator
 
     def log_metric(
@@ -278,8 +289,9 @@ def train(
 
     Args:
         datasets: ``{name: DataFrame}`` from ``data.split``. Must include
-            ``"training"``; ``"evaluation"`` is recognized for the
-            ``X_eval / y_eval`` convenience and auto-scoring.
+            ``"train"``; ``"val"`` is recognized for the
+            ``X_val / y_val`` convenience and auto-scoring;
+            ``"test"`` is recognized for ``X_test / y_test``.
         target: label column name (or list of names for multi-target).
         model_type: free-form string tagged on the run as ``model_type``
             (surfaced in the nubison UI). Two values get special
