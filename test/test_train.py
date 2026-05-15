@@ -105,14 +105,35 @@ class TestFitShortcut:
             loaded = pickle.load(f)
         assert hasattr(loaded, "predict")
 
-    def test_fit_logs_evaluation_score(
+    def test_fit_logs_evaluation_accuracy_for_classifier(
         self, datasets, tmp_path, monkeypatch, mlflow_server
     ):
         monkeypatch.chdir(tmp_path)
         with train(datasets=datasets, target="target") as t:
             t.fit(LogisticRegression(max_iter=200))
         run = MlflowClient().get_run(t.run_id)
-        assert "evaluation_score" in run.data.metrics
+        assert "evaluation_accuracy" in run.data.metrics
+
+    def test_fit_logs_evaluation_r2_for_regressor(
+        self, tmp_path, monkeypatch, mlflow_server
+    ):
+        monkeypatch.chdir(tmp_path)
+        train_df = _df_with_uri(
+            {"a": list(range(20)), "target": [2 * x for x in range(20)]},
+            "memory://training",
+        )
+        eval_df = _df_with_uri(
+            {"a": list(range(5)), "target": [2 * x for x in range(5)]},
+            "memory://evaluation",
+        )
+        with train(
+            datasets={"training": train_df, "evaluation": eval_df},
+            target="target",
+            model_type="regressor",
+        ) as t:
+            t.fit(LinearRegression())
+        run = MlflowClient().get_run(t.run_id)
+        assert "evaluation_r2" in run.data.metrics
 
     def test_fit_passes_fit_kwargs(
         self, datasets, tmp_path, monkeypatch, mlflow_server

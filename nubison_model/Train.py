@@ -34,7 +34,7 @@ import pickle
 import subprocess
 from contextlib import contextmanager
 from os import getenv, makedirs, path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 import mlflow
 import pandas as pd
@@ -178,6 +178,7 @@ class TrainContext:
         datasets: Dict[str, pd.DataFrame],
         target: TargetT,
         weights_path: str,
+        model_type: str,
     ):
         if TRAINING_KEY not in datasets:
             raise KeyError(
@@ -187,6 +188,7 @@ class TrainContext:
         self.datasets = datasets
         self._target = target
         self._weights_path = weights_path
+        self._model_type = model_type
         self.X, self.y = _split_features_target(datasets[TRAINING_KEY], target)
         eval_df = datasets.get(EVALUATION_KEY)
         if isinstance(eval_df, pd.DataFrame):
@@ -197,15 +199,26 @@ class TrainContext:
         self.run_id: Optional[str] = None
 
     def fit(self, estimator: Any, **fit_kwargs: Any) -> Any:
-        """Train ``estimator`` on ``self.X / self.y`` (sklearn-style)."""
+        """Train ``estimator`` on ``self.X / self.y`` (sklearn-style).
+
+        Auto-saves the fitted model to ``weights_path`` and logs
+        ``evaluation_accuracy`` (classifier) or ``evaluation_r2``
+        (regressor) on the evaluation split — sklearn's ``score()``
+        returns accuracy for classifiers, R² for regressors.
+        """
         estimator.fit(self.X, self.y, **fit_kwargs)
         self.save(estimator)
         if self.X_eval is not None and self.y_eval is not None:
             try:
                 score = estimator.score(self.X_eval, self.y_eval)
-                mlflow.log_metric("evaluation_score", float(score))
+                metric_key = (
+                    "evaluation_accuracy"
+                    if self._model_type == "classifier"
+                    else "evaluation_r2"
+                )
+                mlflow.log_metric(metric_key, float(score))
             except Exception as e:
-                logger.debug(f"evaluation_score skipped: {e}")
+                logger.debug(f"evaluation score skipped: {e}")
         return estimator
 
     def log_metric(
@@ -249,6 +262,7 @@ def train(
     datasets: Dict[str, pd.DataFrame],
     target: TargetT,
     *,
+    model_type: Literal["classifier", "regressor"] = "classifier",
     weights_path: str = DEFAULT_WEIGHTS_PATH,
     artifact_dirs: Optional[str] = None,
     extra_params: Optional[Dict[str, Any]] = None,
@@ -263,6 +277,9 @@ def train(
             ``"training"``; ``"evaluation"`` is recognized for the
             ``X_eval / y_eval`` convenience and auto-scoring.
         target: label column name (or list of names for multi-target).
+        model_type: ``"classifier"`` or ``"regressor"`` — selects the
+            evaluation metric name (``evaluation_accuracy`` / ``evaluation_r2``)
+            that ``t.fit()`` logs on the evaluation split.
         weights_path: where ``t.save(model)`` writes the pickle. Default
             ``src/weights.pkl`` matches ``register(artifact_dirs="src")``.
         artifact_dirs: comma-separated extra directories logged at the
@@ -295,7 +312,7 @@ def train(
     except Exception as e:
         logger.debug(f"mlflow.autolog() failed: {e}")
 
-    ctx = TrainContext(datasets, target, weights_path)
+    ctx = TrainContext(datasets, target, weights_path, model_type)
 
     with mlflow.start_run() as run:
         ctx.run_id = run.info.run_id
