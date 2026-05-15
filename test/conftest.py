@@ -60,7 +60,7 @@ def _mlflow_cmd(port, backend_store, artifact_store):
         "server",
         "--backend-store-uri",
         f"sqlite:///{Path(backend_store.name) / 'mlflow.db'}",
-        "--default-artifact-root",
+        "--artifacts-destination",
         artifact_store.name,
         "--host",
         "127.0.0.1",

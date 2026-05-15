@@ -327,6 +327,8 @@ def register(
 
     # Start a new MLflow run
     with mlflow.start_run() as run:
+        run_id = run.info.run_id
+
         # Log parameters and metrics
         if params:
             mlflow.log_params(params)
@@ -335,14 +337,29 @@ def register(
         if tags:
             mlflow.set_tags(tags)
 
+        # BC: mirror artifact_dirs into the run's `artifacts/` root.
+        # mlflow 3.x stores `pyfunc.log_model(artifacts=...)` under a
+        # LoggedModel entity, leaving the run's `artifacts/` empty. We
+        # log them again at the run level so existing consumers that
+        # call `client.download_artifacts(run_id, "")` still find them.
+        # NOTE: _make_artifact_dir_dict resolves env (ARTIFACT_DIRS) when
+        # the parameter is None — do not gate on `artifact_dirs` truthiness.
+        for entry_name, local_path in _make_artifact_dir_dict(
+            artifact_dirs
+        ).items():
+            if path.exists(local_path):
+                mlflow.log_artifacts(
+                    local_dir=local_path, artifact_path=entry_name
+                )
+
         # Log the model to MLflow
-        # Always use folder structure to maintain consistent artifact paths
+        # mlflow 3.x requires `name=` (artifact_path is deprecated)
         model_info: ModelInfo = mlflow.pyfunc.log_model(
             registered_model_name=None if skip_model_registration else model_name,
             python_model=NubisonMLFlowModel(model),
             conda_env=_make_conda_env(),
             artifacts=_make_artifact_dir_dict(artifact_dirs),
-            artifact_path="",
+            name="model",
         )
 
         # Set tags on the registered model version
@@ -356,4 +373,7 @@ def register(
                     tag_value,
                 )
 
-        return model_info.model_uri
+        # BC: return legacy URI shape regardless of mlflow 3.x LoggedModel.
+        if skip_model_registration:
+            return f"runs:/{run_id}/model"
+        return f"models:/{model_name}/{model_info.registered_model_version}"

@@ -1,86 +1,72 @@
-# # nubison-model example
+# nubison-model example
 
-This is an example of how to use the `nubison-model` library to register a user model.
+End-to-end example showing the **train → register → serve** workflow with
+`nubison-model`. The two notebooks chain together: `train.ipynb` produces
+a fitted estimator at `src/weights.pkl`, and `model.ipynb` packages that
+file as an inference service via `register()`.
 
-## ## Prerequisites
+## Prerequisites
 
-- mlflow server is running on `http://127.0.0.1:5000` or set `MLFLOW_TRACKING_URI` environment variable.
+- An MLflow server reachable at `http://127.0.0.1:5000` (or set
+  `MLFLOW_TRACKING_URI`).
+- Dependencies in `requirements.txt` installed.
 
-## ## Example structure
+## Structure
 
 ```
 example/
-├── model.ipynb
+├── train.ipynb              # data.load → data.split → train → src/weights.pkl
+├── model.ipynb              # NubisonModel wrapping weights.pkl → register → test_client
 ├── requirements.txt
 └── src/
-    └── SimpleLinearModel.py
+    ├── iris_demo.py         # demo helper used by train.ipynb (not shipped)
+    └── weights.pkl          # produced by train.ipynb, packaged by model.ipynb
 ```
 
-- `model.ipynb`: A notebook file that shows how to register a user model and test it.
-- `requirements.txt`: A file that specifies the dependencies of the model.
-- `src/`: A directory that contains the source code of the model.
+## Order of execution
 
-## ## How to register a user model and test it
+1. **`train.ipynb`** — loads the iris dataset (file / S3 / SQL Explorer
+   connection), splits it, calls `train()`. The fitted estimator is
+   pickled to `src/weights.pkl` automatically.
+2. **`model.ipynb`** — defines a `NubisonModel` that loads `src/weights.pkl`
+   in `load_model` and calls `predict` in `infer`. `register()` packages
+   `src/` (including `weights.pkl`) as an MLflow Model Registry entry, and
+   `test_client` runs an HTTP smoke test.
 
-The `model.ipynb` file shows how to register a user model. It contains the following steps:
+You can run `model.ipynb` standalone too — its `UserModel` only depends on
+`src/weights.pkl`. If you haven't run `train.ipynb` yet you'll need to
+provide that file by other means.
 
-1. Define a user model.
-2. Register the user model.
-3. Test the model.
+## API summary
 
-### ### Define a user model
+### `train(estimator, datasets, target, ...)`
 
-- The user model should be a class that implements the `NubisonModel` protocol.
-- The `load_model` method is used to load the model weights from the file.
-- The `infer` method is used to return the inference result.
+One-call training entry point. Works for any framework following the
+sklearn `fit(X, y, **kwargs)` interface — sklearn / xgboost / lightgbm /
+keras / fastai, and PyTorch via `skorch` or `pytorch-lightning`.
 
-#### #### `load_model` method
+Returns the MLflow `run_id`. Side effects:
+- sets tracking URI / experiment, runs `autolog()`
+- starts a run with system metrics
+- logs each `datasets` entry as a separate `log_input` for lineage
+- scores the estimator on non-`"training"` splits (`accuracy` / `r2`)
+- pickles the fitted estimator to `src/weights.pkl`
+- logs any directories listed in `artifact_dirs`
 
-- Use this method to prepare the model for inference which can be time-consuming.
-- This method is called once when the model inference server starts.
-- The `load_model` method receives a `ModelContext` dictionary containing:
-  - `worker_index`: Index of the worker process (0-based) for parallel processing
-  - `num_workers`: Total number of workers running the model
-- This information is particularly useful for GPU initialization in parallel setups, where you can map specific workers to specific GPU devices.
-- The path to the model weights file can be specified relative.
+### `register(NubisonModel(), artifact_dirs="src", ...)`
 
-#### #### `infer` method
+Packages the inference code as an MLflow `pyfunc` model. The `NubisonModel`
+class must implement:
+- `load_model(self, context: ModelContext)` — runs once at server start
+- `infer(self, ...)` — runs per request, returns JSON-serializable result
 
-- This method is called for each inference request.
-- This method can take any number of arguments.
-- The return and argument types of the `infer` method can be `int`, `float`, `str`, `list`(`Tensor`, `ndarray`) and `dict`.
+`artifact_dirs="src"` ships `src/weights.pkl` so `load_model` can pickle-load it.
 
-### ### Register a user model
+### `test_client(model_id)`
 
-The `register` function is used to register the user model with MLflow. It supports the following parameters:
+Spins up the registered model as a local HTTP service for smoke testing.
 
-- `model`: The model to register (required). Must implement the NubisonModel protocol.
-- `model_name`: Name to register the model under. Defaults to env var MODEL_NAME or 'Default'.
-- `mlflow_uri`: MLflow tracking URI. Defaults to env var MLFLOW_TRACKING_URI or local URI.
-- `artifact_dirs`: Specifies the folders containing the files used by the model class.
-  If the model class does not use any files, this argument can be omitted.
-- `params`: Optional dictionary of parameters to log with the MLflow run.
-- `metrics`: Optional dictionary of metrics to log with the MLflow run.
-- `tags`: Optional dictionary of tags to log with the model version.
-- `skip_model_registration`: When `True`, logs the experiment and packages the
-  model as a run artifact but skips creating a Model Registry entry. The
-  returned URI uses the `runs:/` prefix and can later be registered via
-  `mlflow.register_model(uri, model_name)`. Default: `False`.
+## requirements.txt
 
-### ### Test a user model
-
-- The `test_client` function is used to test the model.
-- It can be used to test the model through HTTP requests.
-
-## ## requirements.txt
-
-- The `requirements.txt` file is used to specify the dependencies of the model.
-- The packages listed here will be installed in the environment where the model is deployed.
-- If no `requirements.txt` file is provided, current environment packages will be used.
-
-## ## src
-
-- The `src/` directory contains the source code of the model.
-- The name `src/` can be changed to any other name and additional folders can be added. The folders should be specified in the `artifact_dirs` argument of the `register` function.
-- The files in those folders should be imported using absolute paths from `model.ipynb`.
-- Both relative and absolute paths can be used when importing inside the `src/` directory. Check the `SimpleLinearModel.py` and `utils/logger.py` for more details.
+Specifies the dependencies installed in the inference server's environment.
+If omitted, the current Python environment is captured automatically.
