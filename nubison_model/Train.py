@@ -26,6 +26,7 @@ pickled to ``src/weights.pkl`` so ``register(artifact_dirs="src")``
 ships it as an inference artifact.
 """
 
+import hashlib
 import logging
 import pickle
 import subprocess
@@ -85,12 +86,23 @@ def _split_features_target(
 
 def _best_effort_log_notebook_source() -> None:
     """If running inside Jupyter (JPY_SESSION_NAME set), log the notebook
-    file as an artifact under ``source/``. Best-effort."""
+    as an artifact under ``source/`` and tag the run with ``notebook.hash``
+    (sha256[:12] of the file).
+
+    The ``notebook.hash`` tag is mlplatform's Source-column primary key:
+    its frontend matches runs to notebooks by this tag (sliced to 12
+    chars) and uses ``<hash>.ipynb`` as the download filename. Falls back
+    to git commit / run_id otherwise, but neither survives in the
+    typical mlplatform notebook container (``/home/jovyan`` is not a git
+    repo), so this tag is the only stable identity."""
     session = getenv(ENV_VAR_JPY_SESSION_NAME)
     if not session or not path.exists(session):
         return
     try:
         mlflow.log_artifact(session, artifact_path="source")
+        with open(session, "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()[:12]
+        mlflow.set_tag("notebook.hash", sha)
     except Exception as e:
         logger.debug(f"Could not log notebook source: {e}")
 
@@ -114,7 +126,11 @@ def _best_effort_git_tags() -> Dict[str, str]:
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        tags["mlflow.source.git.dirty"] = "true" if status.strip() else "false"
+        is_dirty = "true" if status.strip() else "false"
+        tags["mlflow.source.git.dirty"] = is_dirty
+        # mlplatform frontend reads the un-prefixed key; keep both for
+        # compatibility until the frontend migrates to the mlflow.* form.
+        tags["git.dirty"] = is_dirty
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     return tags
@@ -284,7 +300,11 @@ def train(
     mlflow.set_tracking_uri(_resolve_mlflow_uri(mlflow_uri))
     mlflow.set_experiment(_resolve_experiment_name(experiment_name))
     try:
-        mlflow.autolog()
+        # log_datasets=False — keep our explicit per-split lineage from
+        # `_log_dataset_inputs`. Without it, autolog adds its own generic
+        # "dataset" entry that obscures the training / evaluation /
+        # ... splits we want for mlflow.log_input lineage.
+        mlflow.autolog(log_datasets=False)
     except Exception as e:
         logger.debug(f"mlflow.autolog() failed: {e}")
 
