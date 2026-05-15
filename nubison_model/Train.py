@@ -139,6 +139,15 @@ def _log_dataset_inputs(
             mlflow.log_input(dataset, context=ctx)
         except Exception as e:
             logger.debug(f"log_input failed for {ctx!r}: {e}")
+        # Mirror the original source URI as a tag so consumers (e.g. the
+        # nubison UI) can render the logical lineage for schemes mlflow
+        # doesn't recognise (dbref://, memory://, …). mlflow itself stores
+        # only the resolvable URIs above as the Dataset's `source`.
+        if source_uri:
+            try:
+                mlflow.set_tag(f"nubison.dataset.{ctx}.source", source_uri)
+            except Exception as e:
+                logger.debug(f"source tag for {ctx!r} failed: {e}")
 
 
 def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:

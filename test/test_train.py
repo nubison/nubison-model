@@ -247,6 +247,19 @@ class TestLineage:
         assert "train" in names
         assert "val" in names
 
+    def test_dataset_source_uri_mirrored_as_tag(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        # mlflow rejects unknown schemes for dataset source — we mirror the
+        # original source_uri (dbref://, memory://, ...) as a run tag so
+        # the nubison UI can still render the logical lineage.
+        monkeypatch.chdir(tmp_path)
+        with train(datasets=datasets, target="target") as t:
+            t.fit(LogisticRegression(max_iter=200))
+        run = MlflowClient().get_run(t.run_id)
+        assert run.data.tags["nubison.dataset.train.source"] == "memory://train"
+        assert run.data.tags["nubison.dataset.val.source"] == "memory://val"
+
 
 class TestModelTypeTag:
     def test_model_type_tag_set(
