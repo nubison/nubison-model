@@ -187,12 +187,16 @@ def split(
 
 
 def _resolve_db_info(name: str) -> dict:
-    """Resolve a SQL Explorer connection by name.
+    """Resolve a SQL Explorer connection by its user-facing name.
 
-    Mirrors ``jupyterlab-sql-explorer.engine._getDbInfo``:
-    1. ``DB_<NAME>`` env var (base64 of the JSON connection dict), or
-    2. ``~/.local/share/jupyterlab-sql-explorer/db_conf.json``
-       (overridable via ``JUPYTERLAB_SQL_EXPLORER_DB_CONF`` env).
+    Lookup order:
+    1. ``DB_<NAME>`` env var (base64 of the JSON connection dict). The
+       env-var convention is reused by mlplatform PodDefault injection.
+    2. ``~/.local/share/jupyterlab-sql-explorer/db_conf.json`` (path
+       overridable via ``JUPYTERLAB_SQL_EXPLORER_DB_CONF`` env).
+       The SQL Explorer UI keys entries by numeric id with the
+       connection name in an inner ``name`` field — match by that
+       field, not by the outer key.
     """
     env_var = f"{ENV_VAR_DB_PREFIX}{name}"
     encoded = getenv(env_var)
@@ -204,8 +208,9 @@ def _resolve_db_info(name: str) -> dict:
     ).expanduser()
     if conf_path.exists():
         cfg = json.loads(conf_path.read_text())
-        if name in cfg:
-            return cfg[name]
+        for entry in cfg.values():
+            if isinstance(entry, dict) and entry.get("name") == name:
+                return entry
 
     raise KeyError(
         f"SQL Explorer connection {name!r} not found "

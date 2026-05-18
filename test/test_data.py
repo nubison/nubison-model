@@ -137,13 +137,25 @@ class TestResolveDbInfo:
         assert data._resolve_db_info("X")["db_host"] == "from-env"
 
     def test_file_fallback(self, monkeypatch, tmp_path):
-        info = {"db_id": "Y", "db_type": "3", "db_name": str(tmp_path / "y.db")}
+        """SQL Explorer UI persists entries keyed by numeric id with the
+        user-facing name stored in the ``name`` field. Resolution must
+        match on that inner field, not on the outer key."""
+        info = {
+            "name": "MYDB",
+            "db_id": "1",
+            "db_type": "2",
+            "db_host": "pg.example.svc",
+            "db_port": "5432",
+            "db_name": "appdb",
+            "db_user": "u",
+            "db_pass": "p",
+        }
         conf = tmp_path / "db_conf.json"
-        conf.write_text(json.dumps({"Y": info}))
-        monkeypatch.delenv("DB_Y", raising=False)
+        conf.write_text(json.dumps({"1": info}))
+        monkeypatch.delenv("DB_MYDB", raising=False)
         monkeypatch.setenv("JUPYTERLAB_SQL_EXPLORER_DB_CONF", str(conf))
 
-        assert data._resolve_db_info("Y") == info
+        assert data._resolve_db_info("MYDB") == info
 
     def test_not_found_raises(self, monkeypatch, tmp_path):
         monkeypatch.delenv("DB_MISSING", raising=False)
