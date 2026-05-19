@@ -136,6 +136,10 @@ behavior.
 
 ## Migration notes — v0.0.10 (mlflow 3.x bump)
 
+**Python 3.9 support is dropped** — the project now requires Python
+`>=3.10,<3.13` because mlflow 3.x itself requires Python 3.10+.
+Downstream installs on 3.9 will fail at resolve time.
+
 The `mlflow` client pin is bumped from `^2.17` to `>=3.12.0,<3.14.0` so
 it matches a 3.x mlflow server (mlplatform K8s runs `mlflow/mlflow:v3.12`).
 The upper bound stops short of 3.14 because each mlflow 3.x minor has
