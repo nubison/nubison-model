@@ -2,6 +2,8 @@
 
 This project is a SDK for integrate ML model to Nubison.
 
+Requires Python 3.10 or newer (mlflow 3.x requires Python >=3.10).
+
 ## Usage
 
 ### Load training data
