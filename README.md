@@ -136,8 +136,11 @@ behavior.
 
 ## Migration notes — v0.0.10 (mlflow 3.x bump)
 
-The `mlflow` client pin is bumped from `^2.17` to `^3.0` so it matches a
-3.x mlflow server (mlplatform K8s runs `mlflow/mlflow:v3.12`).
+The `mlflow` client pin is bumped from `^2.17` to `>=3.12.0,<3.14.0` so
+it matches a 3.x mlflow server (mlplatform K8s runs `mlflow/mlflow:v3.12`).
+The upper bound stops short of 3.14 because each mlflow 3.x minor has
+shipped breaking changes — when 3.14 lands we widen the pin after
+re-running the test matrix against it.
 
 User-visible behavior is unchanged — `register()` keeps its signature
 and still returns the legacy URI shape (`models:/<name>/<version>` or
