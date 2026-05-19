@@ -10,10 +10,37 @@ def get_run_id_from_model_uri(model_uri: str) -> str:
     """
     Extracts the run_id from a given model_uri.
 
+    Supports both legacy formats and mlflow 3.x LoggedModel URIs:
+      - ``runs:/<run_id>/<path>`` → returns ``<run_id>``
+      - ``models:/<name>/<version>`` → resolves via MlflowClient
+      - ``models:/m-<logged_model_id>`` (mlflow 3.x LoggedModel URI)
+        → resolves to the source run via MlflowClient
+
     :param model_uri: The URI of the model.
     :return: The extracted run_id.
     """
-    return model_uri.split("/")[1]
+    import mlflow
+    from mlflow.tracking import MlflowClient
+
+    parts = model_uri.split("/")
+    if model_uri.startswith("runs:/"):
+        return parts[1]
+
+    client = MlflowClient()
+    if model_uri.startswith("models:/"):
+        identifier = parts[1]
+        # mlflow 3.x LoggedModel id starts with "m-"
+        if identifier.startswith("m-"):
+            logged_model = client.get_logged_model(identifier)
+            return logged_model.source_run_id
+        # Registered model: models:/<name>/<version>
+        version = parts[2] if len(parts) > 2 else None
+        if version is None:
+            raise ValueError(f"Cannot extract run_id from {model_uri!r}")
+        mv = client.get_model_version(identifier, version)
+        return mv.run_id
+
+    raise ValueError(f"Unsupported model_uri prefix: {model_uri!r}")
 
 
 @contextmanager

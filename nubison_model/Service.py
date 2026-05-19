@@ -2,6 +2,7 @@ import glob
 import hashlib
 import logging
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from functools import wraps
@@ -332,21 +333,68 @@ def load_nubison_mlflow_model(mlflow_tracking_uri, mlflow_model_uri):
         return nubison_model
 
 
+def _cleanup_shared_cache_for_uri(model_uri: str) -> None:
+    """Best-effort removal of nubison cache + mlflow download folder for ``model_uri``.
+
+    Used by ``test_client`` so repeated calls in long-running notebooks
+    don't accumulate state under ``/tmp``. Production BentoML serving
+    does not call this — its caching is keyed to one Pod / one model.
+    """
+    shared = _get_shared_artifacts_dir()
+    cache_key = _get_model_cache_key(model_uri)
+    path_file = f"{shared}.path_{cache_key}"
+    lock_file = f"{shared}.lock_{cache_key}"
+
+    # Resolve mlflow's download folder via the cached model_root, then rmtree.
+    if os.path.exists(path_file):
+        try:
+            with open(path_file, "r") as f:
+                model_root = f.read().strip()
+            if model_root and os.path.isdir(model_root):
+                shutil.rmtree(model_root, ignore_errors=True)
+        except OSError as e:
+            logger.debug(f"Could not read/remove model_root from {path_file}: {e}")
+
+    # Remove nubison side meta files for this model_uri.
+    for target in (path_file, lock_file):
+        try:
+            os.remove(target)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.debug(f"Could not remove {target}: {e}")
+
+    # Remove any dvc_done marker tied to this model_uri (DVC enabled case).
+    for old in glob.glob(f"{shared}.dvc_done_*"):
+        try:
+            with open(old, "r") as f:
+                marker = f.read().strip()
+            if marker == f"version:{model_uri}":
+                os.remove(old)
+        except OSError:
+            pass
+
+
 @contextmanager
 def test_client(model_uri):
 
     # Create a temporary directory and set it as the current working directory to run tests
     # To avoid model initialization conflicts with the current directory
     test_dir = TemporaryDirectory()
-    with temporary_cwd(test_dir.name):
-        app = build_inference_service(mlflow_model_uri=model_uri)
-        # Disable metrics for testing. Avoids Prometheus client duplicated registration error
-        app.config["metrics"] = {"enabled": False}
+    try:
+        with temporary_cwd(test_dir.name):
+            app = build_inference_service(mlflow_model_uri=model_uri)
+            # Disable metrics for testing. Avoids Prometheus client duplicated registration error
+            app.config["metrics"] = {"enabled": False}
 
-        with TestClient(app.to_asgi()) as client:
-            yield client
-
-    test_dir.cleanup()
+            with TestClient(app.to_asgi()) as client:
+                yield client
+    finally:
+        # Best-effort cleanup so repeated test_client() calls in long-running
+        # notebooks don't accumulate state under /tmp (mlflow download folder
+        # + nubison meta files for this model_uri).
+        _cleanup_shared_cache_for_uri(model_uri)
+        test_dir.cleanup()
 
 
 def build_inference_service(

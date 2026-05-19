@@ -60,7 +60,7 @@ def _mlflow_cmd(port, backend_store, artifact_store):
         "server",
         "--backend-store-uri",
         f"sqlite:///{Path(backend_store.name) / 'mlflow.db'}",
-        "--default-artifact-root",
+        "--artifacts-destination",
         artifact_store.name,
         "--host",
         "127.0.0.1",
@@ -90,6 +90,12 @@ def mlflow_server():
                 raise RuntimeError(f"Failed to start server {uri}")
 
             os.environ[ENV_VAR_MLFLOW_TRACKING_URI] = uri
+            # Disable mlflow system-metrics background thread for the
+            # whole test session: the 1Hz pushes against the sqlite
+            # backend + 4 uvicorn workers accumulate load and produce
+            # read timeouts on later tests. Production users keep the
+            # default (ON) via env-var absence.
+            os.environ["MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"] = "false"
 
             yield uri  # Provide the tracking URI to the tests
 

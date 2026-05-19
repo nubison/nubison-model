@@ -1,8 +1,10 @@
 import logging
+import shutil
+import tempfile
 from importlib.metadata import distributions
 from os import getenv, makedirs, path, symlink
 from sys import version_info as py_version_info
-from typing import Any, List, Optional, Protocol, TypedDict, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, TypedDict, runtime_checkable
 
 import mlflow
 from mlflow.models.model import ModelInfo
@@ -197,6 +199,43 @@ def _make_conda_env() -> dict:
     }
 
 
+_ARTIFACT_IGNORE_PATTERNS = (
+    "__pycache__",
+    "*.pyc",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".DS_Store",
+)
+
+
+def _copy_artifact_dirs_filtered(
+    artifact_dir_dict: Dict[str, str], tmp_root: str
+) -> Dict[str, str]:
+    """Copy each artifact dir to ``tmp_root`` skipping caches/checkpoints.
+
+    Returns a new ``{name: tmp_path}`` dict pointing at the cleaned copies
+    so neither ``log_artifacts`` nor ``pyfunc.log_model`` ships
+    ``__pycache__/``, ``*.pyc``, ``.ipynb_checkpoints/``, etc.
+    """
+    filtered: Dict[str, str] = {}
+    ignore = shutil.ignore_patterns(*_ARTIFACT_IGNORE_PATTERNS)
+    for name, src in artifact_dir_dict.items():
+        if not path.exists(src):
+            logger.warning(
+                f"artifact_dirs entry {name!r} skipped, path not found: {src!r}"
+            )
+            continue
+        dst = path.join(tmp_root, name.replace("/", "_"))
+        if path.isdir(src):
+            shutil.copytree(src, dst, ignore=ignore)
+        else:
+            makedirs(path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+        filtered[name] = dst
+    return filtered
+
+
 def _make_artifact_dir_dict(
     artifact_dirs: Optional[str],
     exclude_weight_files: bool = False,
@@ -327,6 +366,8 @@ def register(
 
     # Start a new MLflow run
     with mlflow.start_run() as run:
+        run_id = run.info.run_id
+
         # Log parameters and metrics
         if params:
             mlflow.log_params(params)
@@ -335,15 +376,35 @@ def register(
         if tags:
             mlflow.set_tags(tags)
 
-        # Log the model to MLflow
-        # Always use folder structure to maintain consistent artifact paths
-        model_info: ModelInfo = mlflow.pyfunc.log_model(
-            registered_model_name=None if skip_model_registration else model_name,
-            python_model=NubisonMLFlowModel(model),
-            conda_env=_make_conda_env(),
-            artifacts=_make_artifact_dir_dict(artifact_dirs),
-            artifact_path="",
-        )
+        # Copy artifact dirs once to a tempdir with __pycache__ / *.pyc /
+        # .ipynb_checkpoints filtered out, and reuse the cleaned paths
+        # for both the BC run-level mirror and pyfunc.log_model.
+        # NOTE: _make_artifact_dir_dict resolves env (ARTIFACT_DIRS) when
+        # the parameter is None — do not gate on `artifact_dirs` truthiness.
+        with tempfile.TemporaryDirectory(prefix="nubison_artifacts_") as tmp:
+            filtered_artifacts = _copy_artifact_dirs_filtered(
+                _make_artifact_dir_dict(artifact_dirs), tmp
+            )
+
+            # BC: mirror artifact_dirs into the run's `artifacts/` root.
+            # mlflow 3.x stores `pyfunc.log_model(artifacts=...)` under a
+            # LoggedModel entity, leaving the run's `artifacts/` empty. We
+            # log them again at the run level so existing consumers that
+            # call `client.download_artifacts(run_id, "")` still find them.
+            for entry_name, local_path in filtered_artifacts.items():
+                mlflow.log_artifacts(
+                    local_dir=local_path, artifact_path=entry_name
+                )
+
+            # Log the model to MLflow
+            # mlflow 3.x requires `name=` (artifact_path is deprecated)
+            model_info: ModelInfo = mlflow.pyfunc.log_model(
+                registered_model_name=None if skip_model_registration else model_name,
+                python_model=NubisonMLFlowModel(model),
+                conda_env=_make_conda_env(),
+                artifacts=filtered_artifacts,
+                name="model",
+            )
 
         # Set tags on the registered model version
         if tags and not skip_model_registration:
@@ -356,4 +417,7 @@ def register(
                     tag_value,
                 )
 
-        return model_info.model_uri
+        # BC: return legacy URI shape regardless of mlflow 3.x LoggedModel.
+        if skip_model_registration:
+            return f"runs:/{run_id}/model"
+        return f"models:/{model_name}/{model_info.registered_model_version}"

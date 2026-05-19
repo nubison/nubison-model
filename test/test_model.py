@@ -34,6 +34,11 @@ def test_register_model(mlflow_server):
     with temporary_dirs(artifact_dirs), temporary_env(
         {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
     ):
+        # Place a non-empty file in each artifact dir so mlflow.log_artifacts
+        # has content to upload (mlflow 3.x skips empty dirs).
+        for d in artifact_dirs:
+            with open(path.join(d, "module.py"), "w") as f:
+                f.write("# placeholder for register() artifact upload\n")
         # Register the model
         model_id = register(DummyModel(), model_name=model_name)
         run_id = get_run_id_from_model_uri(model_id)
@@ -44,10 +49,12 @@ def test_register_model(mlflow_server):
     registered_model = client.get_registered_model(model_name)
     assert registered_model.name == model_name
 
-    # assert that the model has the correct code paths
-    artifact_path = client.download_artifacts(run_id, "")
+    # assert that the artifact dirs are present at the run level
+    run_artifacts = {a.path for a in client.list_artifacts(run_id)}
     for dir in artifact_dirs:
-        assert path.exists(path.join(artifact_path, "artifacts", dir))
+        assert dir in run_artifacts, (
+            f"expected {dir!r} in run artifacts, got {run_artifacts}"
+        )
 
     # delete the registered model after the test
     client.delete_registered_model(model_name)
@@ -202,6 +209,10 @@ def test_register_skip_model_still_packaged(mlflow_server):
     with temporary_dirs(artifact_dirs), temporary_env(
         {"ARTIFACT_DIRS": ",".join(artifact_dirs)}
     ):
+        # Non-empty content for mlflow 3.x log_artifacts
+        for d in artifact_dirs:
+            with open(path.join(d, "module.py"), "w") as f:
+                f.write("# placeholder for register() artifact upload\n")
         run_uri = register(
             DummyModel(),
             model_name=model_name,
@@ -210,9 +221,11 @@ def test_register_skip_model_still_packaged(mlflow_server):
 
     run_id = get_run_id_from_model_uri(run_uri)
     client = MlflowClient()
-    artifact_path = client.download_artifacts(run_id, "")
+    run_artifacts = {a.path for a in client.list_artifacts(run_id)}
     for d in artifact_dirs:
-        assert path.exists(path.join(artifact_path, "artifacts", d))
+        assert d in run_artifacts, (
+            f"expected {d!r} in run artifacts, got {run_artifacts}"
+        )
 
 
 def test_register_skip_returns_runs_uri(mlflow_server):

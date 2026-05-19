@@ -2,3 +2,12 @@ dist
 __pycache__
 .vscode
 .tox
+
+# Personal Claude Code infrastructure (not shared)
+.claude/
+CLAUDE.md
+.issues/
+
+# Notebook execution artifacts
+.ipynb_checkpoints/
+example/src/weights.pkl
