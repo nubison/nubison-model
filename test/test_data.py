@@ -6,7 +6,7 @@ import pytest
 from moto import mock_aws
 from sqlalchemy import create_engine
 
-from nubison_model import SOURCE_URI_ATTR, data
+from nubison_model import SOURCE_URI_ATTR, data, train
 
 
 @pytest.fixture
@@ -328,28 +328,28 @@ def split_df():
 class TestSplitBasic:
     def test_two_way_split_sizes(self, split_df):
         result = data.split(
-            split_df, {"training": 0.8, "evaluation": 0.2}, shuffle=False
+            split_df, {"train": 0.8, "val": 0.2}, shuffle=False
         )
-        assert set(result.keys()) == {"training", "evaluation"}
-        assert len(result["training"]) == 80
-        assert len(result["evaluation"]) == 20
+        assert set(result.keys()) == {"train", "val"}
+        assert len(result["train"]) == 80
+        assert len(result["val"]) == 20
 
     def test_three_way_split_sizes(self, split_df):
         result = data.split(
             split_df,
-            {"training": 0.7, "evaluation": 0.2, "test": 0.1},
+            {"train": 0.7, "val": 0.2, "test": 0.1},
             shuffle=False,
         )
-        assert len(result["training"]) == 70
-        assert len(result["evaluation"]) == 20
+        assert len(result["train"]) == 70
+        assert len(result["val"]) == 20
         assert len(result["test"]) == 10
 
     def test_no_shuffle_preserves_order(self, split_df):
         result = data.split(
-            split_df, {"training": 0.5, "evaluation": 0.5}, shuffle=False
+            split_df, {"train": 0.5, "val": 0.5}, shuffle=False
         )
-        assert list(result["training"]["x"]) == list(range(50))
-        assert list(result["evaluation"]["x"]) == list(range(50, 100))
+        assert list(result["train"]["x"]) == list(range(50))
+        assert list(result["val"]["x"]) == list(range(50, 100))
 
     def test_total_rows_covered(self, split_df):
         result = data.split(split_df, {"a": 0.33, "b": 0.33, "c": 0.34}, shuffle=False)
@@ -382,12 +382,12 @@ class TestSplitSourceUri:
     def test_source_prefix_sets_per_key_attrs(self, split_df):
         result = data.split(
             split_df,
-            {"training": 0.5, "evaluation": 0.5},
+            {"train": 0.5, "val": 0.5},
             shuffle=False,
             source_prefix="s3://bucket/dataset",
         )
-        assert result["training"].attrs[SOURCE_URI_ATTR] == "s3://bucket/dataset/training"
-        assert result["evaluation"].attrs[SOURCE_URI_ATTR] == "s3://bucket/dataset/evaluation"
+        assert result["train"].attrs[SOURCE_URI_ATTR] == "s3://bucket/dataset/train"
+        assert result["val"].attrs[SOURCE_URI_ATTR] == "s3://bucket/dataset/val"
 
     def test_inherits_input_source_uri(self, split_df):
         split_df.attrs[SOURCE_URI_ATTR] = "s3://bucket/data.csv"
@@ -443,15 +443,27 @@ class TestSplitValidation:
 
 
 class TestSplitIntoTrainPipeline:
-    def test_round_trip_with_train(self, tmp_path, split_df):
-        # Verify the typical flow: load() → split() yields dict suitable for train()
+    def test_round_trip_with_train(
+        self, tmp_path, monkeypatch, split_df, mlflow_server
+    ):
+        # Verify the typical flow end-to-end: load() → split() → train()
+        # accepts the dict without a KeyError, source_uri propagates.
+        from sklearn.linear_model import LogisticRegression
+
         csv = tmp_path / "data.csv"
         split_df.to_csv(csv, index=False)
         loaded = data.load(f"file://{csv}")
         result = data.split(
-            loaded, {"training": 0.8, "evaluation": 0.2}, shuffle=False
+            loaded, {"train": 0.8, "val": 0.2}, shuffle=False
         )
-        assert set(result.keys()) == {"training", "evaluation"}
+        assert set(result.keys()) == {"train", "val"}
         for key, sub in result.items():
             assert SOURCE_URI_ATTR in sub.attrs
             assert sub.attrs[SOURCE_URI_ATTR].endswith(f"#{key}")
+
+        monkeypatch.chdir(tmp_path)
+        with train(
+            datasets=result, target="target", model_type="classifier"
+        ) as t:
+            t.fit(LogisticRegression(max_iter=200))
+        assert t.run_id is not None
