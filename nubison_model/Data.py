@@ -242,13 +242,24 @@ def _build_sqlalchemy_uri(info: dict) -> "URL":
     if scheme == "sqlite":
         return URL.create(drivername="sqlite", database=database)
 
-    port = info.get("db_port") or None
+    raw_port = info.get("db_port") or None
+    port: Optional[int]
+    if raw_port in (None, ""):
+        port = None
+    else:
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"db_port must be an integer, got {raw_port!r}"
+            ) from None
+
     return URL.create(
         drivername=scheme,
         username=info.get("db_user") or None,
         password=info.get("db_pass") or None,
         host=info.get("db_host") or None,
-        port=int(port) if port not in (None, "") else None,
+        port=port,
         database=database,
     )
 

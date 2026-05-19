@@ -214,6 +214,13 @@ class TestBuildSqlalchemyUri:
         with pytest.raises(ValueError, match="Unsupported db_type"):
             data._build_sqlalchemy_uri({"db_type": "999"})
 
+    def test_invalid_port_raises_value_error(self):
+        with pytest.raises(ValueError, match="db_port must be an integer"):
+            data._build_sqlalchemy_uri({
+                "db_type": "2", "db_host": "h", "db_port": "5abc",
+                "db_name": "d", "db_user": "u", "db_pass": "p",
+            })
+
 
 class TestConnection:
     def test_load_returns_dataframe_with_credential_free_source_uri(
