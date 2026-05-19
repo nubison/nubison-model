@@ -250,7 +250,7 @@ class TrainContext:
                 )
                 mlflow.log_metric(metric_key, float(score))
             except Exception as e:
-                logger.debug(f"val score skipped: {e}")
+                logger.warning(f"val score skipped: {e}")
         return estimator
 
     def log_metric(
