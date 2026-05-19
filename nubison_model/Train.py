@@ -94,27 +94,49 @@ def _best_effort_log_notebook_source() -> None:
         logger.debug(f"Could not log notebook source: {e}")
 
 
+_GIT_TIMEOUT_SECONDS = 5
+
+
 def _best_effort_git_tags() -> Dict[str, str]:
-    """Capture git commit + dirty state if we're inside a git repo."""
+    """Capture git commit + dirty state if we're inside a git repo.
+
+    Each git call is bounded by ``_GIT_TIMEOUT_SECONDS`` so a slow NFS
+    mount or a wedged git process can't stall ``train()`` startup —
+    failing to capture the tag is acceptable, blocking the run isn't.
+    """
     tags: Dict[str, str] = {}
     try:
         commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
         ).strip()
         if commit:
             tags["mlflow.source.git.commit"] = commit
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         return tags
     try:
         status = subprocess.check_output(
-            ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL, text=True
+            ["git", "status", "--porcelain"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
         )
         is_dirty = "true" if status.strip() else "false"
         tags["mlflow.source.git.dirty"] = is_dirty
         # mlplatform frontend reads the un-prefixed key; keep both for
         # compatibility until the frontend migrates to the mlflow.* form.
         tags["git.dirty"] = is_dirty
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         pass
     return tags
 
