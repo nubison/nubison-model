@@ -168,31 +168,47 @@ class TestResolveDbInfo:
 
 class TestBuildSqlalchemyUri:
     def test_postgresql(self):
-        uri = data._build_sqlalchemy_uri({
+        url = data._build_sqlalchemy_uri({
             "db_type": "2", "db_host": "h", "db_port": 5432,
             "db_name": "d", "db_user": "u", "db_pass": "p@ss",
         })
-        assert uri == "postgresql+psycopg2://u:p%40ss@h:5432/d"
+        assert url.render_as_string(hide_password=False) == (
+            "postgresql+psycopg2://u:p%40ss@h:5432/d"
+        )
 
     def test_mysql(self):
-        uri = data._build_sqlalchemy_uri({
+        url = data._build_sqlalchemy_uri({
             "db_type": "1", "db_host": "h", "db_port": 3306,
             "db_name": "d", "db_user": "u", "db_pass": "p",
         })
-        assert uri == "mysql+pymysql://u:p@h:3306/d"
+        assert url.render_as_string(hide_password=False) == (
+            "mysql+pymysql://u:p@h:3306/d"
+        )
 
     def test_oracle(self):
-        uri = data._build_sqlalchemy_uri({
+        url = data._build_sqlalchemy_uri({
             "db_type": "4", "db_host": "h", "db_port": 1521,
             "db_name": "d", "db_user": "u", "db_pass": "p",
         })
-        assert uri == "oracle+cx_oracle://u:p@h:1521/d"
+        assert url.render_as_string(hide_password=False) == (
+            "oracle+cx_oracle://u:p@h:1521/d"
+        )
 
     def test_sqlite_uses_db_name_as_path(self, tmp_path):
-        uri = data._build_sqlalchemy_uri({
+        url = data._build_sqlalchemy_uri({
             "db_type": "3", "db_name": str(tmp_path / "f.db"),
         })
-        assert uri == f"sqlite:///{tmp_path / 'f.db'}"
+        assert url.render_as_string(hide_password=False) == (
+            f"sqlite:///{tmp_path / 'f.db'}"
+        )
+
+    def test_password_masked_in_string_repr(self):
+        url = data._build_sqlalchemy_uri({
+            "db_type": "2", "db_host": "h", "db_port": 5432,
+            "db_name": "d", "db_user": "u", "db_pass": "supersecret",
+        })
+        assert "supersecret" not in str(url)
+        assert "supersecret" not in repr(url)
 
     def test_unsupported_db_type(self):
         with pytest.raises(ValueError, match="Unsupported db_type"):

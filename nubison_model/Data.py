@@ -29,13 +29,16 @@ import logging
 import math
 import pathlib
 from os import getenv
-from typing import Dict, Optional
-from urllib.parse import quote_plus, urlparse
+from typing import TYPE_CHECKING, Dict, Optional, Union
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
 
 from nubison_model.Storage import ENV_VAR_AWS_ENDPOINT_URL
+
+if TYPE_CHECKING:
+    from sqlalchemy import URL
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +221,15 @@ def _resolve_db_info(name: str) -> dict:
     )
 
 
-def _build_sqlalchemy_uri(info: dict) -> str:
-    """Convert a SQL Explorer connection dict to a SQLAlchemy URL."""
+def _build_sqlalchemy_uri(info: dict) -> "URL":
+    """Convert a SQL Explorer connection dict to a SQLAlchemy URL.
+
+    Returns a :class:`sqlalchemy.URL` rather than a plain string so the
+    password is masked in ``str(url)`` / ``repr(url)`` and therefore in
+    any exception traceback that surfaces the URL.
+    """
+    from sqlalchemy import URL
+
     db_type = str(info.get("db_type", ""))
     scheme = DB_TYPE_TO_SCHEME.get(db_type)
     if not scheme:
@@ -228,28 +238,19 @@ def _build_sqlalchemy_uri(info: dict) -> str:
             f"Known: {sorted(DB_TYPE_TO_SCHEME)}"
         )
 
-    user = info.get("db_user", "") or ""
-    password = info.get("db_pass", "") or ""
-    host = info.get("db_host", "") or ""
-    port = info.get("db_port", "") or ""
     database = info.get("db_name", "") or ""
-
     if scheme == "sqlite":
-        # SQLAlchemy sqlite form: sqlite:////abs/path/to/file.db
-        return f"sqlite:///{database}"
+        return URL.create(drivername="sqlite", database=database)
 
-    auth = ""
-    if user:
-        auth = quote_plus(user)
-        if password:
-            auth += f":{quote_plus(password)}"
-        auth += "@"
-
-    netloc = host
-    if port:
-        netloc = f"{host}:{port}"
-
-    return f"{scheme}://{auth}{netloc}/{database}"
+    port = info.get("db_port") or None
+    return URL.create(
+        drivername=scheme,
+        username=info.get("db_user") or None,
+        password=info.get("db_pass") or None,
+        host=info.get("db_host") or None,
+        port=int(port) if port not in (None, "") else None,
+        database=database,
+    )
 
 
 def _hash_query(query: str) -> str:
@@ -314,7 +315,7 @@ def _load_s3(uri: str) -> pd.DataFrame:
     return pd.read_csv(buf)
 
 
-def _load_sql(uri: str, query: str) -> pd.DataFrame:
+def _load_sql(uri: Union[str, "URL"], query: str) -> pd.DataFrame:
     from sqlalchemy import create_engine
 
     engine = create_engine(uri)
