@@ -123,6 +123,7 @@ def load(uri: str) -> pd.DataFrame:
 def split(
     df: pd.DataFrame,
     ratios: Dict[str, float],
+    *,
     shuffle: bool = True,
     random_state: Optional[int] = None,
     source_prefix: Optional[str] = None,
