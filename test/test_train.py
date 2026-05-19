@@ -345,6 +345,38 @@ class TestArtifactDirs:
         artifacts = {a.path for a in MlflowClient().list_artifacts(t.run_id)}
         assert "info.txt" in artifacts
 
+    def test_artifact_dirs_filters_pycache(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        """train() should drop the same noise (__pycache__, *.pyc,
+        .ipynb_checkpoints, ...) that register() filters, so an
+        artifact_dirs="src" call doesn't ship build/test debris."""
+        monkeypatch.chdir(tmp_path)
+        extra = tmp_path / "extra"
+        extra.mkdir()
+        (extra / "keep.txt").write_text("keep")
+        (extra / "__pycache__").mkdir()
+        (extra / "__pycache__" / "x.cpython-312.pyc").write_text("noise")
+        (extra / "trash.pyc").write_text("noise")
+        (extra / ".ipynb_checkpoints").mkdir()
+        (extra / ".ipynb_checkpoints" / "ckpt.ipynb").write_text("noise")
+        with train(
+            datasets=datasets, target="target", artifact_dirs="extra"
+        ) as t:
+            t.fit(LogisticRegression(max_iter=200))
+        client = MlflowClient()
+        all_paths: set[str] = set()
+        stack = [a.path for a in client.list_artifacts(t.run_id)]
+        while stack:
+            cur = stack.pop()
+            all_paths.add(cur)
+            for child in client.list_artifacts(t.run_id, cur):
+                stack.append(child.path)
+        assert any(p.endswith("keep.txt") for p in all_paths)
+        assert not any("__pycache__" in p for p in all_paths)
+        assert not any(p.endswith(".pyc") for p in all_paths)
+        assert not any(".ipynb_checkpoints" in p for p in all_paths)
+
 
 # ---------------------------------------------------------------------------
 # run_id lifecycle

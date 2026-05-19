@@ -32,7 +32,9 @@ import hashlib
 import logging
 import math
 import pickle
+import shutil
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from os import getenv, makedirs, path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
@@ -42,6 +44,7 @@ import pandas as pd
 
 from nubison_model.Data import SOURCE_URI_ATTR
 from nubison_model.Model import (
+    _ARTIFACT_IGNORE_PATTERNS,
     DEFAULT_MLFLOW_URI,
     ENV_VAR_MLFLOW_TRACKING_URI,
 )
@@ -166,7 +169,17 @@ def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
             )
             continue
         try:
-            mlflow.log_artifacts(abs_entry)
+            # Copy to a temp dir applying the same ignore patterns
+            # Model._copy_artifact_dirs_filtered uses, so __pycache__/,
+            # *.pyc, .ipynb_checkpoints/, etc. don't ship to mlflow.
+            with tempfile.TemporaryDirectory() as tmp:
+                dst = path.join(tmp, path.basename(abs_entry.rstrip(path.sep)))
+                shutil.copytree(
+                    abs_entry,
+                    dst,
+                    ignore=shutil.ignore_patterns(*_ARTIFACT_IGNORE_PATTERNS),
+                )
+                mlflow.log_artifacts(dst)
         except Exception as e:
             logger.warning(f"log_artifacts({abs_entry!r}) failed: {e}")
 
@@ -336,6 +349,12 @@ def train(
 
     Yields:
         :class:`TrainContext` — see its docstring for the full API.
+
+    Note:
+        Exiting the ``with`` block calls ``mlflow.autolog(disable=True)``
+        process-wide, restoring autolog to "off". If you had enabled
+        ``mlflow.autolog()`` *before* ``train()`` and want it back on
+        for code after the block, call ``mlflow.autolog()`` again.
 
     Raises:
         KeyError: ``datasets`` does not contain a ``"train"`` key.
