@@ -222,6 +222,9 @@ def _copy_artifact_dirs_filtered(
     ignore = shutil.ignore_patterns(*_ARTIFACT_IGNORE_PATTERNS)
     for name, src in artifact_dir_dict.items():
         if not path.exists(src):
+            logger.warning(
+                f"artifact_dirs entry {name!r} skipped, path not found: {src!r}"
+            )
             continue
         dst = path.join(tmp_root, name.replace("/", "_"))
         if path.isdir(src):

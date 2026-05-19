@@ -139,7 +139,7 @@ def _log_dataset_inputs(
             dataset = mlflow.data.from_pandas(df, **kwargs)
             mlflow.log_input(dataset, context=ctx)
         except Exception as e:
-            logger.debug(f"log_input failed for {ctx!r}: {e}")
+            logger.warning(f"log_input failed for {ctx!r}: {e}")
         # Mirror the original source URI as a tag so consumers (e.g. the
         # nubison UI) can render the logical lineage for schemes mlflow
         # doesn't recognise (dbref://, memory://, …). mlflow itself stores
@@ -148,7 +148,7 @@ def _log_dataset_inputs(
             try:
                 mlflow.set_tag(f"nubison.dataset.{ctx}.source", source_uri)
             except Exception as e:
-                logger.debug(f"source tag for {ctx!r} failed: {e}")
+                logger.warning(f"source tag for {ctx!r} failed: {e}")
 
 
 def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
@@ -159,11 +159,15 @@ def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
         if not entry:
             continue
         abs_entry = path.abspath(entry)
-        if path.exists(abs_entry):
-            try:
-                mlflow.log_artifacts(abs_entry)
-            except Exception as e:
-                logger.debug(f"log_artifacts({abs_entry!r}) failed: {e}")
+        if not path.exists(abs_entry):
+            logger.warning(
+                f"artifact_dirs entry skipped, path not found: {abs_entry!r}"
+            )
+            continue
+        try:
+            mlflow.log_artifacts(abs_entry)
+        except Exception as e:
+            logger.warning(f"log_artifacts({abs_entry!r}) failed: {e}")
 
 
 class TrainContext:
