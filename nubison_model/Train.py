@@ -156,11 +156,14 @@ def _log_extra_artifact_dirs(artifact_dirs: Optional[str]) -> None:
         return
     for entry in artifact_dirs.split(","):
         entry = entry.strip()
-        if entry and path.exists(entry):
+        if not entry:
+            continue
+        abs_entry = path.abspath(entry)
+        if path.exists(abs_entry):
             try:
-                mlflow.log_artifacts(entry)
+                mlflow.log_artifacts(abs_entry)
             except Exception as e:
-                logger.debug(f"log_artifacts({entry!r}) failed: {e}")
+                logger.debug(f"log_artifacts({abs_entry!r}) failed: {e}")
 
 
 class TrainContext:
