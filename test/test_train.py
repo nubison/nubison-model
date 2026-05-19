@@ -11,6 +11,13 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from nubison_model import SOURCE_URI_ATTR, train
 
 
+def _nan_score(self, X, y):
+    """Module-level helper so monkeypatching an estimator's .score
+    method doesn't add an instance attribute that would break pickle
+    in t.fit's auto-save path."""
+    return float("nan")
+
+
 def _df_with_uri(data: dict, uri: str) -> pd.DataFrame:
     df = pd.DataFrame(data)
     df.attrs[SOURCE_URI_ATTR] = uri
@@ -139,6 +146,25 @@ class TestFitShortcut:
         run = MlflowClient().get_run(t.run_id)
         assert "val_accuracy" not in run.data.metrics
         assert "val_r2" not in run.data.metrics
+
+    def test_fit_skips_log_metric_on_nan_val_score(
+        self, datasets, tmp_path, monkeypatch, mlflow_server
+    ):
+        """A NaN score (e.g. constant y_val) must not be persisted as a
+        metric — mlflow's UI hides NaN values, which would otherwise
+        look identical to "metric never logged"."""
+        monkeypatch.chdir(tmp_path)
+        # Class-level patch keeps the estimator pickleable (instance
+        # attrs would get pickled by t.fit's auto-save).
+        monkeypatch.setattr(
+            LogisticRegression, "score", _nan_score, raising=True
+        )
+        with train(
+            datasets=datasets, target="target", model_type="classifier"
+        ) as t:
+            t.fit(LogisticRegression(max_iter=200))
+        run = MlflowClient().get_run(t.run_id)
+        assert "val_accuracy" not in run.data.metrics
 
     def test_fit_logs_val_r2_for_regressor(
         self, tmp_path, monkeypatch, mlflow_server

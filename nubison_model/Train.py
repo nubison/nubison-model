@@ -30,6 +30,7 @@ so ``register(artifact_dirs="src")`` ships it.
 
 import hashlib
 import logging
+import math
 import pickle
 import subprocess
 from contextlib import contextmanager
@@ -242,13 +243,19 @@ class TrainContext:
             and self.y_val is not None
         ):
             try:
-                score = estimator.score(self.X_val, self.y_val)
+                score = float(estimator.score(self.X_val, self.y_val))
                 metric_key = (
                     "val_accuracy"
                     if self._model_type == "classifier"
                     else "val_r2"
                 )
-                mlflow.log_metric(metric_key, float(score))
+                if math.isnan(score):
+                    logger.warning(
+                        f"val {metric_key} is NaN — likely constant y_val "
+                        f"or insufficient samples; skipping log_metric"
+                    )
+                else:
+                    mlflow.log_metric(metric_key, score)
             except Exception as e:
                 logger.warning(f"val score skipped: {e}")
         return estimator
