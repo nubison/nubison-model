@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 ENV_VAR_MLFLOW_EXPERIMENT_NAME = "MLFLOW_EXPERIMENT_NAME"
 ENV_VAR_JPY_SESSION_NAME = "JPY_SESSION_NAME"
+ENV_VAR_MLFLOW_SYSTEM_METRICS = "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"
 DEFAULT_EXPERIMENT_NAME = "Default"
 DEFAULT_WEIGHTS_PATH = "src/weights.pkl"
 
@@ -305,8 +306,8 @@ def train(
         model_type: free-form string tagged on the run as ``model_type``
             (surfaced in the nubison UI). Two values get special
             treatment: ``"classifier"`` and ``"regressor"`` make
-            ``t.fit()`` log ``evaluation_accuracy`` / ``evaluation_r2``
-            on the evaluation split. Other values (e.g. ``"clustering"``,
+            ``t.fit()`` log ``val_accuracy`` / ``val_r2``
+            on the ``"val"`` split. Other values (e.g. ``"clustering"``,
             ``"anomaly_detection"``) just tag the run — the user logs
             their own metrics via ``t.log_metric``.
         weights_path: where ``t.save(model)`` writes the pickle. Default
@@ -323,7 +324,7 @@ def train(
         :class:`TrainContext` — see its docstring for the full API.
 
     Raises:
-        KeyError: ``datasets`` does not contain a ``"training"`` key.
+        KeyError: ``datasets`` does not contain a ``"train"`` key.
     """
     mlflow.set_tracking_uri(
         mlflow_uri or getenv(ENV_VAR_MLFLOW_TRACKING_URI) or DEFAULT_MLFLOW_URI
@@ -343,7 +344,12 @@ def train(
 
     ctx = TrainContext(datasets, target, weights_path, model_type)
 
-    with mlflow.start_run() as run:
+    # Default ON per issue #22 spec; honor MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING
+    # so users (and the test suite against sqlite mlflow) can opt out.
+    env_val = getenv(ENV_VAR_MLFLOW_SYSTEM_METRICS, "").strip().lower()
+    log_system_metrics = env_val not in ("false", "0", "no")
+
+    with mlflow.start_run(log_system_metrics=log_system_metrics) as run:
         ctx.run_id = run.info.run_id
         _best_effort_log_notebook_source()
         git_tags = _best_effort_git_tags()

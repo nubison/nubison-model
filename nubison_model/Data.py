@@ -113,7 +113,7 @@ def split(
         ratios: Mapping ``{name: ratio}`` whose values must sum to
             approximately ``1.0`` (within ``1e-6``). Keys become the
             output dict keys. Example:
-            ``{"training": 0.8, "evaluation": 0.2}``.
+            ``{"train": 0.8, "val": 0.2}``.
         shuffle: If ``True`` (default), shuffle the rows before
             splitting. The original ``df`` is not mutated.
         random_state: Seed for the shuffle. ``None`` (default) is
