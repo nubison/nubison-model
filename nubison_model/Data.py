@@ -189,6 +189,18 @@ def split(
     if sizes:
         sizes[-1] += remainder
 
+    # Reject splits where any key would receive zero rows. Silently
+    # producing an empty subset (e.g. n=3 with 0.6/0.2/0.2) lets a
+    # zero-row dataset reach mlflow lineage and the user's training
+    # loop with no signal.
+    zero_keys = [k for k, s in zip(keys, sizes) if s == 0]
+    if zero_keys:
+        raise ValueError(
+            f"split would produce zero-row subset(s) for keys "
+            f"{zero_keys} given len(df)={n} and ratios={dict(ratios)}. "
+            f"Increase len(df) or adjust the ratios."
+        )
+
     result: Dict[str, pd.DataFrame] = {}
     start = 0
     for key, size in zip(keys, sizes):

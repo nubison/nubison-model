@@ -431,6 +431,16 @@ class TestSplitValidation:
         with pytest.raises(ValueError, match="Cannot split an empty"):
             data.split(empty, {"a": 1.0})
 
+    def test_zero_row_subset_raises(self):
+        """A tiny df + a ratio combination that rounds any subset to 0
+        rows must error rather than silently producing an empty
+        DataFrame (which would propagate as 0-row dataset lineage)."""
+        tiny = pd.DataFrame({"x": [1, 2, 3]})
+        with pytest.raises(ValueError, match="zero-row subset"):
+            data.split(
+                tiny, {"train": 0.6, "val": 0.2, "test": 0.2}, shuffle=False
+            )
+
 
 class TestSplitIntoTrainPipeline:
     def test_round_trip_with_train(self, tmp_path, split_df):
