@@ -273,6 +273,26 @@ class TestConnection:
             data.connection("NOPE")
 
 
+class TestLoadUnsupportedExtension:
+    def test_json_file_raises(self, tmp_path):
+        p = tmp_path / "data.json"
+        p.write_text('[{"a": 1}]')
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            data.load(str(p))
+
+    def test_xlsx_file_raises(self, tmp_path):
+        p = tmp_path / "data.xlsx"
+        p.write_bytes(b"PK\x03\x04")
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            data.load(str(p))
+
+    def test_no_extension_raises(self, tmp_path):
+        p = tmp_path / "data_no_ext"
+        p.write_text("a,b\n1,2\n")
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            data.load(str(p))
+
+
 class TestLoadUnsupportedScheme:
     def test_unsupported_scheme_raises(self):
         with pytest.raises(ValueError, match="Unsupported URI scheme"):

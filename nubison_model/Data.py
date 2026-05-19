@@ -44,6 +44,23 @@ logger = logging.getLogger(__name__)
 
 SOURCE_URI_ATTR = "source_uri"
 RATIO_SUM_TOLERANCE = 1e-6
+SUPPORTED_FILE_EXTENSIONS = (".csv", ".parquet")
+
+
+def _read_by_extension(path_or_buf, source: str) -> pd.DataFrame:
+    """Dispatch on file extension; raise ValueError on unsupported types.
+
+    ``source`` is the URI / path used purely for the error message.
+    """
+    src_lower = source.lower()
+    if src_lower.endswith(".parquet"):
+        return pd.read_parquet(path_or_buf)
+    if src_lower.endswith(".csv"):
+        return pd.read_csv(path_or_buf)
+    raise ValueError(
+        f"Unsupported file extension for {source!r}. "
+        f"Supported: {SUPPORTED_FILE_EXTENSIONS}"
+    )
 
 # JupyterLab SQL Explorer integration -----------------------------------
 # - Pod injects a saved connection as ``DB_<NAME>`` env var (base64 of
@@ -86,7 +103,8 @@ def load(uri: str) -> pd.DataFrame:
         DataFrame with ``attrs["source_uri"] = uri``.
 
     Raises:
-        ValueError: Unsupported URI scheme.
+        ValueError: Unsupported URI scheme, or the path's extension is
+            not in ``SUPPORTED_FILE_EXTENSIONS`` (``.csv``, ``.parquet``).
     """
     scheme = urlparse(uri).scheme
     if scheme == "s3":
@@ -321,9 +339,7 @@ def _load_s3(uri: str) -> pd.DataFrame:
     body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     buf = io.BytesIO(body)
 
-    if key.endswith(".parquet"):
-        return pd.read_parquet(buf)
-    return pd.read_csv(buf)
+    return _read_by_extension(buf, uri)
 
 
 def _load_sql(uri: Union[str, "URL"], query: str) -> pd.DataFrame:
@@ -344,6 +360,4 @@ def _load_file(uri: str) -> pd.DataFrame:
     if not path:
         raise ValueError(f"Invalid file URI: {uri!r}")
 
-    if path.endswith(".parquet"):
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
+    return _read_by_extension(path, uri)
