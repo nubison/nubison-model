@@ -1,6 +1,14 @@
 """nubison-model package."""
 
-__version__ = "0.0.0"
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("nubison-model")
+except PackageNotFoundError:
+    # Editable install or source tree without metadata — fall back to
+    # the pyproject placeholder. The real version is filled by
+    # poetry-dynamic-versioning at build time.
+    __version__ = "0.0.0"
 
 from . import Data as data
 from .Data import SOURCE_URI_ATTR
