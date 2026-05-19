@@ -15,6 +15,7 @@ mlflow = ">=3.12.0,<3.13.0"
 bentoml = "^1.3.10"
 filelock = "^3.16.1"
 dvc = {version = "^3.55", extras = ["s3"]}
+boto3 = "^1.34"
 PyYAML = "^6.0"
 
 [tool.poetry.group.dev.dependencies]
