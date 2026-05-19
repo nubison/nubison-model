@@ -356,22 +356,31 @@ def train(
     env_val = getenv(ENV_VAR_MLFLOW_SYSTEM_METRICS, "").strip().lower()
     log_system_metrics = env_val not in ("false", "0", "no")
 
-    with mlflow.start_run(log_system_metrics=log_system_metrics) as run:
-        ctx.run_id = run.info.run_id
-        _best_effort_log_notebook_source()
-        git_tags = _best_effort_git_tags()
-        if git_tags:
-            mlflow.set_tags(git_tags)
-        if model_type:
-            mlflow.set_tag("model_type", model_type)
-        if extra_params:
-            mlflow.log_params(extra_params)
-        if extra_tags:
-            mlflow.set_tags(extra_tags)
+    try:
+        with mlflow.start_run(log_system_metrics=log_system_metrics) as run:
+            ctx.run_id = run.info.run_id
+            _best_effort_log_notebook_source()
+            git_tags = _best_effort_git_tags()
+            if git_tags:
+                mlflow.set_tags(git_tags)
+            if model_type:
+                mlflow.set_tag("model_type", model_type)
+            if extra_params:
+                mlflow.log_params(extra_params)
+            if extra_tags:
+                mlflow.set_tags(extra_tags)
+            try:
+                yield ctx
+            finally:
+                # Log per-split lineage *after* the user's training so
+                # autolog's hooks don't override ours.
+                _log_dataset_inputs(datasets, target)
+                _log_extra_artifact_dirs(artifact_dirs)
+    finally:
+        # autolog() flips process-wide state in mlflow; restore it so
+        # code running after the `with train()` block doesn't get
+        # surprise auto-logging on its own mlflow.start_run() calls.
         try:
-            yield ctx
-        finally:
-            # Log per-split lineage *after* the user's training so
-            # autolog's hooks don't override ours.
-            _log_dataset_inputs(datasets, target)
-            _log_extra_artifact_dirs(artifact_dirs)
+            mlflow.autolog(disable=True)
+        except Exception as e:
+            logger.debug(f"mlflow.autolog(disable=True) failed: {e}")
