@@ -1,0 +1,87 @@
+name: Build and Push Container Images
+
+# Builds the CPU and GPU serving images and pushes them to GHCR.
+# - CPU keeps the unsuffixed tag (`:<version>`, `:latest`) for backward compatibility
+#   with existing consumers (e.g. publish(image="ghcr.io/nubison/nubison-model:0.0.7")).
+# - GPU is published under the `-gpu` suffix (`:<version>-gpu`, `:latest-gpu`).
+# Floating tags (:latest, :cpu, :gpu, :latest-gpu) are only moved on a published release,
+# not on manual workflow_dispatch runs.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version tag (e.g. 0.0.8). Defaults to the short commit SHA."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/nubison/nubison-model
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            dockerfile: container/Dockerfile
+          - variant: gpu
+            dockerfile: container/Dockerfile.gpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            V="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="$(git rev-parse --short HEAD)"
+          fi
+          V="${V#v}"  # strip a leading v (v0.0.8 -> 0.0.8)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          IS_RELEASE="${{ github.event_name == 'release' }}"
+          if [ "${{ matrix.variant }}" = "cpu" ]; then
+            TAGS="${IMAGE}:${V},${IMAGE}:${V}-cpu"
+            [ "$IS_RELEASE" = "true" ] && TAGS="${TAGS},${IMAGE}:latest,${IMAGE}:cpu"
+          else
+            TAGS="${IMAGE}:${V}-gpu"
+            [ "$IS_RELEASE" = "true" ] && TAGS="${TAGS},${IMAGE}:gpu,${IMAGE}:latest-gpu"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./container
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

@@ -1,7 +1,17 @@
 FROM python:3.12.8-slim-bookworm
 
+# System deps for the common ML stack so a model's requirements.txt installs cleanly:
+# build tools (C/C++ ext without wheels), git (git+ requirements), ffmpeg/libsndfile1
+# (audio/video), libsm6/libxext6 (opencv/X runtime libs). Kept in parity with Dockerfile.gpu.
 RUN apt-get update && apt-get install -y \
     bash \
+    git \
+    build-essential \
+    pkg-config \
+    ffmpeg \
+    libsndfile1 \
+    libsm6 \
+    libxext6 \
     python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 

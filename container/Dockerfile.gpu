@@ -1,0 +1,71 @@
+# GPU (CUDA) variant of the nubison-model serving image.
+#
+# Mirrors container/Dockerfile (CPU) but sits on an NVIDIA CUDA runtime base so a
+# model's CUDA-enabled framework wheels (e.g. torch) can use the GPU at serve time.
+#
+# Torch/TF are intentionally NOT baked here. Exactly like the CPU variant,
+# start_server.sh downloads the model's requirements.txt from MLflow and builds the
+# serving venv with uv at runtime, so the CUDA build of torch comes from the model's
+# own requirements. This base only provides the CUDA runtime + cuDNN system libraries
+# and the NVIDIA container-runtime hooks (NVIDIA_VISIBLE_DEVICES / _DRIVER_CAPABILITIES
+# are preset by the nvidia/cuda base image) needed for those wheels to reach the GPU.
+#
+# CUDA 12.8 tracks the torch 2.7 line used by the notebook images. The host GPU driver
+# must be new enough for this CUDA version; torch wheels ship their own CUDA libraries.
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System deps for the common ML stack so a model's requirements.txt installs cleanly:
+# - build-essential/pkg-config: build C/C++ extension packages that ship no wheel
+# - git: pip installs from `git+https://...` requirements
+# - ffmpeg/libsndfile1: audio/video libs (torchaudio, librosa, moviepy, decord)
+# - libsm6/libxext6: complete the opencv/X-linked runtime libraries
+# NOTE: source-compiled CUDA extensions (nvcc) are still NOT covered — that needs the
+# `-cudnn-devel-` base (~2x size). Prefer models that use prebuilt CUDA wheels.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    git \
+    build-essential \
+    pkg-config \
+    ffmpeg \
+    libsndfile1 \
+    libsm6 \
+    libxext6 \
+    python3 \
+    python3-pip \
+    python3-opencv \
+    && rm -rf /var/lib/apt/lists/*
+
+# start_server.sh invokes a bare `python`; map it to the system python3.
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+
+SHELL ["bash", "-c"]
+WORKDIR /app
+
+LABEL org.opencontainers.image.title="nubison-model-gpu" \
+      org.opencontainers.image.description="GPU (CUDA) container image for nubison-model." \
+      org.opencontainers.image.source="https://github.com/nubison/nubison-model"
+
+COPY start_server.sh /app/start_server.sh
+RUN chmod +x /app/start_server.sh
+
+ENV MLFLOW_TRACKING_URI=""
+ENV MLFLOW_MODEL_URI=""
+ENV MLFLOW_MODEL_NAME=""
+ENV MLFLOW_MODEL_VERSION=""
+ENV DEBUG=""
+ENV PORT=3000
+ENV NUM_WORKERS=2
+
+EXPOSE ${PORT}
+
+# Same orchestrator toolchain as the CPU image: uv + mlflow-skinny drive dependency
+# download and venv creation. pip is upgraded first because Ubuntu 22.04 ships an old
+# pip; the base python only needs mlflow-skinny + pyyaml + uv.
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir uv==0.5.10 "mlflow-skinny>=3.12.0,<3.14.0" pyyaml && \
+    uv python install 3.9 3.10 3.11 3.12
+
+ENTRYPOINT [ "/app/start_server.sh" ]
