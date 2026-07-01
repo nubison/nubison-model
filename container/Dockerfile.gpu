@@ -16,9 +16,23 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# System deps for the common ML stack so a model's requirements.txt installs cleanly:
+# - build-essential/pkg-config: build C/C++ extension packages that ship no wheel
+# - git: pip installs from `git+https://...` requirements
+# - ffmpeg/libsndfile1: audio/video libs (torchaudio, librosa, moviepy, decord)
+# - libsm6/libxext6: complete the opencv/X-linked runtime libraries
+# NOTE: source-compiled CUDA extensions (nvcc) are still NOT covered — that needs the
+# `-cudnn-devel-` base (~2x size). Prefer models that use prebuilt CUDA wheels.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
+    git \
+    build-essential \
+    pkg-config \
+    ffmpeg \
+    libsndfile1 \
+    libsm6 \
+    libxext6 \
     python3 \
     python3-pip \
     python3-opencv \

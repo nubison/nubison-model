@@ -28,6 +28,24 @@ docker push ghcr.io/nubison/nubison-model:latest-gpu   # GPU
 
 Both variants are normally built and pushed by CI (`.github/workflows/container-image.yml`) on a published GitHub release (matrix over `cpu`/`gpu`), or on demand via `workflow_dispatch`.
 
+## Library coverage
+
+The image does **not** bake ML frameworks; each model's `requirements.txt` is installed at
+serve time. To let that install succeed for the common ML stack, both images include a
+build toolchain (`build-essential`, `pkg-config`), `git` (for `git+https://` requirements),
+`ffmpeg` + `libsndfile1` (audio/video), and the opencv/X runtime libraries.
+
+Known gaps (a model needing these must handle it itself):
+
+- **Source-compiled CUDA extensions** (e.g. building flash-attn / apex / mmcv from source)
+  need `nvcc` and CUDA headers, which are only in the `-cudnn-devel-` base (~2× size). The GPU
+  image uses the `-runtime-` base, so prefer models that install **prebuilt CUDA wheels**.
+- **CUDA driver / torch wheel compatibility (GPU):** the GPU base targets CUDA 12.8
+  (`NVIDIA_REQUIRE_CUDA=cuda>=12.8`). A model's CUDA framework wheel must match the **node
+  driver** — e.g. a torch wheel built for CUDA 13.0 (`+cu130`) fails on a node whose driver
+  only supports CUDA 12.8. Pin torch to a `cu126`/`cu128` build (or update the node driver).
+- Exotic system libraries not listed above must be added to the image (or vendored by the model).
+
 ## Run
 
 ```bash
