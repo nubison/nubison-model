@@ -24,8 +24,8 @@ from nubison_model.Model import (
     NubisonMLFlowModel,
 )
 from nubison_model.Storage import (
-    DVC_FILES_TAG_KEY,
     DVCPullError,
+    _reassemble_dvc_tag,
     deserialize_dvc_info,
     get_dvc_cache_key,
     is_dvc_enabled,
@@ -167,7 +167,8 @@ def _get_dvc_info_from_model_uri(mlflow_tracking_uri: str, model_uri: str) -> di
 
     try:
         tags = _get_tags_for_uri(client, model_uri)
-        dvc_json = tags.get(DVC_FILES_TAG_KEY) if tags else None
+        # Rejoin any dvc_files__N chunks before decompressing/deserializing.
+        dvc_json = _reassemble_dvc_tag(tags) if tags else None
         return deserialize_dvc_info(dvc_json) if dvc_json else {}
     except Exception as e:
         logger.warning(f"Could not retrieve DVC info from MLflow: {e}")
