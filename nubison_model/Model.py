@@ -11,7 +11,7 @@ from mlflow.models.model import ModelInfo
 from mlflow.pyfunc import PythonModel
 
 from nubison_model.Storage import (
-    DVC_FILES_TAG_KEY,
+    _chunk_tag_value,
     find_weight_files,
     get_size_threshold,
     is_dvc_enabled,
@@ -357,7 +357,9 @@ def register(
                 logger.info(f"  - {wf} ({file_size:.1f} MB)")
 
             dvc_info = push_to_dvc(weight_files, fail_fast=True)
-            tags[DVC_FILES_TAG_KEY] = serialize_dvc_info(dvc_info)
+            # Compress, then split any overflow into dvc_files__N chunks so the
+            # tag stays under the MLflow limit regardless of file count.
+            tags.update(_chunk_tag_value(serialize_dvc_info(dvc_info)))
             logger.info(f"DVC: Uploaded {len(dvc_info)} file(s) to remote storage")
 
     # Set the MLflow tracking URI and experiment

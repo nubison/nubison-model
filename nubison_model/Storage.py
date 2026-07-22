@@ -369,13 +369,59 @@ def pull_from_dvc(
         logger.info("DVC: Pull completed successfully")
 
 
+def _chunk_tag_value(value: str, chunk_size: int = 7900) -> Dict[str, str]:
+    """Split a long tag value into ``dvc_files`` + ``dvc_files__N`` chunks.
+
+    With "always DVC" many files are tracked, and random md5 hashes are
+    high-entropy so gzip barely shrinks them (263 files still ~8188 chars),
+    exceeding the MLflow tag limit (MAX_TAG_VAL_LENGTH=8000). The value is
+    sliced into 7900-char chunks stored across multiple tags and rejoined by
+    ``_reassemble_dvc_tag`` — supporting an unbounded number of files.
+    """
+    parts = [value[i : i + chunk_size] for i in range(0, len(value), chunk_size)] or [value]
+    keys = {DVC_FILES_TAG_KEY: parts[0]}
+    for idx, p in enumerate(parts[1:], start=1):
+        keys[f"{DVC_FILES_TAG_KEY}__{idx}"] = p
+    return keys
+
+
+def _reassemble_dvc_tag(tags: Dict[str, str]) -> Optional[str]:
+    """Rejoin ``dvc_files`` + ``dvc_files__N`` chunks into the original string."""
+    base = tags.get(DVC_FILES_TAG_KEY)
+    if not base:
+        return None
+    parts, idx = [base], 1
+    while True:
+        p = tags.get(f"{DVC_FILES_TAG_KEY}__{idx}")
+        if p is None:
+            break
+        parts.append(p)
+        idx += 1
+    return "".join(parts)
+
+
 def serialize_dvc_info(dvc_info: Dict[str, str]) -> str:
-    """Serialize DVC info to JSON string for MLflow tag."""
-    return json.dumps(dvc_info)
+    """Serialize DVC info as a gzip+base64 tag value (prefix ``gz:``).
+
+    Compressing keeps the tag under the MLflow limit (MAX_TAG_VAL_LENGTH=8000)
+    for many files; ``deserialize_dvc_info`` detects the prefix so legacy
+    plaintext JSON tags stay readable. Any residual overflow is split by
+    ``_chunk_tag_value`` at the call site (``register``).
+    """
+    import base64
+    import gzip
+
+    payload = gzip.compress(json.dumps(dvc_info).encode())
+    return "gz:" + base64.b64encode(payload).decode()
 
 
 def deserialize_dvc_info(dvc_info_json: str) -> Dict[str, str]:
-    """Deserialize DVC info from MLflow tag JSON string."""
+    """Deserialize a DVC info tag — ``gz:`` compressed or legacy plaintext JSON."""
+    if dvc_info_json.startswith("gz:"):
+        import base64
+        import gzip
+
+        dvc_info_json = gzip.decompress(base64.b64decode(dvc_info_json[3:])).decode()
     return json.loads(dvc_info_json)
 
 

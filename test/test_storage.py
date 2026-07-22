@@ -1,5 +1,6 @@
 """Unit tests for artifact storage utilities."""
 
+import json
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -8,9 +9,12 @@ import pytest
 
 from nubison_model.Storage import (
     DEFAULT_SIZE_THRESHOLD,
+    DVC_FILES_TAG_KEY,
     DVCError,
     DVCPullError,
     DVCPushError,
+    _chunk_tag_value,
+    _reassemble_dvc_tag,
     deserialize_dvc_info,
     find_weight_files,
     get_dvc_cache_key,
@@ -159,6 +163,51 @@ class TestSerializeDeserializeDvcInfo:
         serialized = serialize_dvc_info(original)
         deserialized = deserialize_dvc_info(serialized)
         assert deserialized == original
+
+    def test_serialize_uses_gz_prefix(self):
+        serialized = serialize_dvc_info({"model.pt": "abc123"})
+        assert serialized.startswith("gz:")
+
+    def test_deserialize_plaintext_backward_compat(self):
+        # Legacy tags were plaintext JSON (no gz: prefix) and must still load.
+        original = {"model.pt": "abc123", "src/w.bin": "def456"}
+        assert deserialize_dvc_info(json.dumps(original)) == original
+
+    def test_chunk_single_value_fits(self):
+        keys = _chunk_tag_value("short-value")
+        assert keys == {DVC_FILES_TAG_KEY: "short-value"}
+
+    def test_chunk_splits_large_value(self):
+        value = "x" * 20000
+        keys = _chunk_tag_value(value, chunk_size=7900)
+        assert set(keys) == {
+            DVC_FILES_TAG_KEY,
+            f"{DVC_FILES_TAG_KEY}__1",
+            f"{DVC_FILES_TAG_KEY}__2",
+        }
+        assert all(len(v) <= 7900 for v in keys.values())
+        assert _reassemble_dvc_tag(keys) == value
+
+    def test_reassemble_empty_returns_none(self):
+        assert _reassemble_dvc_tag({}) is None
+        assert _reassemble_dvc_tag({"other": "x"}) is None
+
+    def test_full_pipeline_many_files_over_tag_limit(self):
+        # Real md5 hashes are high-entropy, so gzip barely shrinks them: 500
+        # entries exceed the MLflow tag limit (8000) even compressed. The
+        # serialize -> chunk -> reassemble -> deserialize path must reproduce
+        # the original mapping exactly.
+        import hashlib
+
+        original = {
+            f"src/dir{i}/weights_{i}.bin": hashlib.md5(str(i).encode()).hexdigest()
+            for i in range(500)
+        }
+        tags = _chunk_tag_value(serialize_dvc_info(original))
+        assert len(tags) > 1  # actually chunked
+        assert max(len(v) for v in tags.values()) <= 7900
+        restored = deserialize_dvc_info(_reassemble_dvc_tag(tags))
+        assert restored == original
 
 
 class TestGetDvcCacheKey:
